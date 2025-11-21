@@ -1,0 +1,8 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+/* Transparent background for frosted glass effect */
+html, body {
+  background: transparent;
+  -webkit-app-region: no-drag;
+}
