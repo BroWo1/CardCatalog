@@ -41,8 +41,6 @@ Drill down into your library with precision filters:
 
 Download the latest version from the [Releases page](https://github.com/BroWo1/CardCatalog/releases).
 
-## 💻 Development Setup
-
 ## 🛠️ Tech Stack
 
 * **Core:** [Electron](https://www.electronjs.org/)
@@ -50,6 +48,8 @@ Download the latest version from the [Releases page](https://github.com/BroWo1/C
 * **Database:** [sql.js](https://sql.js.org/) (SQLite)
 * **AI:** [Transformers.js](https://huggingface.co/docs/transformers.js/index) (ONNX Runtime)
 * **Workers:** Heavy tasks (EXIF, AI) run in background threads for a buttery smooth UI.
+
+## 💻 Development Setup
 
 ### Prerequisites
 
