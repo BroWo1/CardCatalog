@@ -1,6 +1,6 @@
 {
   "name": "CardCatalog",
-  "version": "1.0.0",
+  "version": "0.0.5",
   "description": "Hello World!",
   "main": "src/main/main.js",
   "scripts": {
