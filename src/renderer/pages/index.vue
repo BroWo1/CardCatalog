@@ -73,13 +73,25 @@
                 </UButton>
               </div>
             </div>
+            <!--
             <div class="status-item">
               <span class="status-label">Scan</span>
               <UBadge :color="statusIntent" variant="soft" size="xs">{{ scanState.status?.toUpperCase() || 'IDLE' }}</UBadge>
             </div>
+            -->
           </div>
           <UButton
-            class="window-no-drag"
+            class="window-no-drag hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            color="gray"
+            variant="ghost"
+            icon="i-heroicons-map"
+            size="sm"
+            to="/map"
+          >
+            Map
+          </UButton>
+          <UButton
+            class="window-no-drag hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             color="gray"
             variant="ghost"
             icon="i-heroicons-computer-desktop"
@@ -425,6 +437,24 @@
                     :class="{ 'collections-strip-collapsed': collapsedCollections.cities }"
                   >
                     <button
+                      type="button"
+                      class="collection-card city-collection-card"
+                      @click="navigateToMap"
+                    >
+                      <div class="collection-thumb">
+                        <div class="collection-thumb-placeholder city-collection-thumb" style="background: #e0f2fe;">
+                          <UIcon name="i-heroicons-map" class="w-8 h-8 text-sky-500" />
+                        </div>
+                      </div>
+                      <div class="collection-card-meta">
+                        <div class="collection-card-meta-content">
+                          <p class="collection-name">Global Map</p>
+                          <p class="collection-count">View all photos on map</p>
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
                       v-for="collection in cityCollections"
                       :key="collection.label"
                       type="button"
@@ -631,6 +661,7 @@
       v-model="photoModalOpen"
       :photo="selectedPhoto"
       :photos="displayedAlbumPhotos"
+      :albums="selectedPhotoAlbums"
       @details-saved="handlePhotoDetailsSaved"
       @navigate-photo="openPhotoModal"
     />
@@ -649,8 +680,15 @@ import { usePhotoFormatter } from '../composables/usePhotoFormatter';
 import { usePhotoZoom } from '../composables/usePhotoZoom';
 import { usePhotoLocation } from '../composables/usePhotoLocation';
 import { createCollapseTransition } from '../utils/collapseTransition';
+import {
+  normalizePhotoFromServer,
+  coerceTagsArray,
+  coerceAiLabelArray,
+  normalizeRatingValue,
+} from '../utils/photoNormalizer';
 
 const nuxtApp = useNuxtApp();
+const router = useRouter();
 const photoAlbum = computed(() => nuxtApp.$photoAlbum || null);
 const isMacLayout = ref(false);
 
@@ -891,7 +929,6 @@ const searchModeTooltip = computed(() => (
     : 'Regular search matches filenames, tags, descriptions, cities, and AI labels'
 ));
 
-const RAW_FORMATS = ['arw', 'cr2', 'cr3', 'nef', 'orf', 'raf', 'rw2', 'dng', 'srw'];
 const activeAlbum = computed(() => albumCollections.value.find((album) => album.id === activeAlbumId.value) || null);
 const isAlbumCollectionView = computed(() => Boolean(activeAlbum.value));
 const isCityCollectionView = computed(() => Boolean(activeCityCollection.value));
@@ -1029,6 +1066,13 @@ const selectedPhotoLocation = computed(() => {
     return null;
   }
   return getPhotoLocation(selectedPhoto.value);
+});
+
+const selectedPhotoAlbums = computed(() => {
+  if (!selectedPhoto.value) return [];
+  return albumCollections.value.filter(album => 
+    album.photos.some(p => p.id === selectedPhoto.value.id)
+  );
 });
 
 const galleryEmptyMessage = computed(() => {
@@ -1900,6 +1944,10 @@ function activateCityCollection(collection) {
   activePrimaryTab.value = 'album';
 }
 
+function navigateToMap() {
+  router.push('/map');
+}
+
 function viewCityCollection(collection) {
   activateCityCollection(collection);
 }
@@ -2220,107 +2268,6 @@ function getVolumeLabel(volumeId) {
   }
   const match = volumes.value.find((volume) => volume.id === volumeId);
   return match ? match.displayLabel || match.label || match.id : volumeId;
-}
-
-function normalizePhotoFromServer(photo) {
-  if (!photo || typeof photo !== 'object') {
-    return null;
-  }
-  const normalizedTags = coerceTagsArray(photo.tags);
-  const aiLabels = coerceAiLabelArray(photo.aiLabels ?? photo.ai_labels);
-  const lat = Number(photo.gpsLat);
-  const lng = Number(photo.gpsLng);
-  const format = typeof photo.format === 'string' ? photo.format.toLowerCase() : '';
-  const derivedRaw = RAW_FORMATS.includes(format);
-  const isRaw = photo.isRaw != null ? Boolean(photo.isRaw) : derivedRaw;
-  return {
-    ...photo,
-    description: typeof photo.description === 'string' ? photo.description : photo.description ?? null,
-    tags: normalizedTags,
-    aiLabels,
-    gpsLat: Number.isFinite(lat) ? lat : null,
-    gpsLng: Number.isFinite(lng) ? lng : null,
-    locationLabel: typeof photo.locationLabel === 'string' ? photo.locationLabel : null,
-    isRaw,
-    rating: normalizeRatingValue(photo.rating),
-  };
-}
-
-function coerceTagsArray(value) {
-  if (!value) {
-    return [];
-  }
-  if (Array.isArray(value)) {
-    return value.map((tag) => (typeof tag === 'string' ? tag.trim() : '')).filter(Boolean);
-  }
-  if (typeof value === 'string' && value.length) {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        return parsed.map((tag) => (typeof tag === 'string' ? tag.trim() : '')).filter(Boolean);
-      }
-    } catch (_error) {
-      // Fall through to comma-delimited parsing
-    }
-    return value
-      .split(',')
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-  }
-  return [];
-}
-
-function coerceAiLabelArray(value) {
-  if (!value) {
-    return [];
-  }
-  let entries = [];
-  if (Array.isArray(value)) {
-    entries = value;
-  } else if (typeof value === 'string' && value.length) {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        entries = parsed;
-      }
-    } catch (_error) {
-      return [];
-    }
-  }
-  return entries
-    .map((entry) => {
-      if (!entry || typeof entry !== 'object') {
-        return null;
-      }
-      const label = typeof entry.label === 'string' ? entry.label.trim() : '';
-      if (!label) {
-        return null;
-      }
-      const scoreValue = Number(entry.score);
-      if (!Number.isFinite(scoreValue)) {
-        return null;
-      }
-      return {
-        label,
-        score: Number(scoreValue.toFixed(4)),
-      };
-    })
-    .filter(Boolean);
-}
-
-function canonicalizeTagsKeyFromArray(tags = []) {
-  return coerceTagsArray(tags).join('||');
-}
-
-function normalizeRatingValue(value) {
-  if (value == null || value === '') {
-    return null;
-  }
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return null;
-  }
-  return Math.max(0, Math.min(5, Math.round(num)));
 }
 
 function applyPhotoPatch(photoId, patch = {}) {

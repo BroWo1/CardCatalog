@@ -96,7 +96,11 @@
         @leave="infoPanelTransition.leave"
         @after-leave="infoPanelTransition.afterLeave"
       >
-        <div v-show="showInfoPanel" class="w-80 bg-white overflow-y-auto flex flex-col border-l border-gray-200">
+        <div 
+          v-show="showInfoPanel" 
+          class="w-80 bg-white overflow-y-auto flex flex-col border-l border-gray-200"
+          @click.stop
+        >
           <!-- Header -->
           <div class="p-4 border-b border-gray-200">
             <button
@@ -110,42 +114,20 @@
           </div>
 
           <!-- Details editor -->
-          <div class="p-4 border-b border-gray-200 space-y-5 details-editor">
+          <div class="p-4 border-b border-gray-200 space-y-4 details-editor">
             <UFormField label="Description">
               <UTextarea
                 v-model="detailsForm.description"
                 rows="3"
-                placeholder="Add a short note about this photo"
+                placeholder="Add a short note..."
+                variant="outline"
+                class="w-full"
+                :ui="{ color: { gray: { outline: 'bg-white' } } }"
+                @blur="saveDetails"
+                @keydown.meta.enter="saveDetails"
               />
             </UFormField>
-            <UFormField label="Tags" description="Type a tag and press Enter">
-              <div class="tag-editor">
-                <div
-                  v-for="(tag, index) in detailsForm.tags"
-                  :key="`${tag}-${index}`"
-                  class="tag-chip"
-                >
-                  <span>{{ tag }}</span>
-                  <button
-                    type="button"
-                    class="tag-chip-remove"
-                    :aria-label="`Remove tag ${tag}`"
-                    @click="removeTagAt(index)"
-                  >
-                    <UIcon name="i-heroicons-x-mark" class="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <input
-                  v-model="detailsForm.newTag"
-                  type="text"
-                  class="tag-input-field"
-                  placeholder="Add tag"
-                  @keydown="handleTagInputKeydown"
-                  @blur="commitTagInput"
-                />
-              </div>
-            </UFormField>
-            <!-- AI Keywords -->
+
             <div v-if="aiKeywords.length" class="space-y-2">
               <div class="flex items-start gap-2">
                 <UIcon name="i-heroicons-sparkles" class="w-4 h-4 text-gray-600 mt-0.5" />
@@ -160,51 +142,8 @@
                       <span class="ai-keyword-score">{{ formatKeywordScore(keyword.score) }}</span>
                     </span>
                   </div>
-                  <p class="text-xs text-gray-500 mt-2">
-                    Auto-tagged with OpenAI CLIP.
-                  </p>
                 </div>
               </div>
-            </div>
-            <UFormField label="Rating" description="Click to rate from 1-5">
-              <div class="rating-control">
-                <button
-                  v-for="star in ratingStars"
-                  :key="star"
-                  type="button"
-                  class="rating-star"
-                  :class="{ 'rating-star-active': star <= (detailsForm.rating || 0) }"
-                  @click="setRating(star)"
-                >
-                  <UIcon
-                    :name="star <= (detailsForm.rating || 0) ? 'i-heroicons-star-solid' : 'i-heroicons-star'"
-                    class="w-5 h-5"
-                  />
-                </button>
-                <span class="rating-value">
-                  {{ ratingLabel }}
-                </span>
-                <button
-                  v-if="detailsForm.rating"
-                  type="button"
-                  class="rating-clear"
-                  @click="clearRating"
-                >
-                  Clear
-                </button>
-              </div>
-            </UFormField>
-            <div class="flex items-center justify-end gap-2 pt-2">
-              <UButton
-                size="sm"
-                color="primary"
-                :disabled="!canSaveDetails"
-                :loading="isSaving"
-                icon="i-heroicons-check"
-                @click="saveDetails"
-              >
-                Save Details
-              </UButton>
             </div>
           </div>
 
@@ -271,16 +210,57 @@
                   </p>
                 </div>
               </div>
-              <div v-if="photoLocation.mapUrl" class="photo-map">
-                <iframe
-                  :src="photoLocation.mapUrl"
-                  title="Photo location map"
-                  loading="lazy"
-                  referrerpolicy="no-referrer"
-                ></iframe>
+              <div v-if="photoLocation.mapUrl" class="photo-map" @click="openMapPage">
+                <div ref="mapContainer" class="photo-map-preview"></div>
               </div>
             </div>
 
+            <!-- Album -->
+            <div v-if="albums && albums.length > 0" class="space-y-3">
+              <div v-for="album in albums" :key="album.id" class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-md overflow-hidden bg-gray-100 shrink-0 border border-gray-200">
+                   <img v-if="getAlbumCover(album)" :src="getAlbumCover(album)" :alt="album.name" class="w-full h-full object-cover" />
+                   <div v-else class="w-full h-full flex items-center justify-center text-gray-400">
+                     <UIcon name="i-heroicons-folder" class="w-5 h-5" />
+                   </div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <p class="text-sm text-gray-900 font-medium truncate">{{ album.name }}</p>
+                  <p class="text-xs text-gray-500">Album</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tags -->
+            <div class="space-y-3 pt-2 border-t border-gray-100">
+              <UFormField label="Tags">
+                <div class="tag-editor">
+                  <div
+                    v-for="(tag, index) in detailsForm.tags"
+                    :key="`${tag}-${index}`"
+                    class="tag-chip"
+                  >
+                    <span>{{ tag }}</span>
+                    <button
+                      type="button"
+                      class="tag-chip-remove"
+                      :aria-label="`Remove tag ${tag}`"
+                      @click.stop="handleRemoveTag(index)"
+                    >
+                      <UIcon name="i-heroicons-x-mark" class="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <input
+                    v-model="detailsForm.newTag"
+                    type="text"
+                    class="tag-input-field"
+                    placeholder="Add tag"
+                    @keydown="handleTagInputKeydownWrapper"
+                    @blur="handleCommitTag"
+                  />
+                </div>
+              </UFormField>
+            </div>
             
           </div>
 
@@ -336,6 +316,7 @@ import { usePhotoFormatter } from '../composables/usePhotoFormatter';
 import { usePhotoZoom } from '../composables/usePhotoZoom';
 import { usePhotoDetails } from '../composables/usePhotoDetails';
 import { usePhotoLocation } from '../composables/usePhotoLocation';
+import 'leaflet/dist/leaflet.css';
 
 const props = defineProps({
   modelValue: {
@@ -347,6 +328,10 @@ const props = defineProps({
     default: null,
   },
   photos: {
+    type: Array,
+    default: () => [],
+  },
+  albums: {
     type: Array,
     default: () => [],
   },
@@ -406,6 +391,81 @@ const {
 // Photo location composable
 const { getPhotoLocation } = usePhotoLocation();
 
+const router = useRouter();
+const mapContainer = ref(null);
+const mapInstance = shallowRef(null);
+const markerLayer = shallowRef(null);
+let Leaflet = null;
+
+async function ensureLeaflet() {
+  if (Leaflet) return Leaflet;
+  const module = await import('leaflet');
+  Leaflet = module.default;
+  return Leaflet;
+}
+
+async function initMap() {
+  if (!mapContainer.value || mapInstance.value) return;
+  const L = await ensureLeaflet();
+
+  mapInstance.value = L.map(mapContainer.value, {
+    center: [0, 0],
+    zoom: 14,
+    zoomControl: false,
+    attributionControl: false,
+    dragging: false,
+    touchZoom: false,
+    doubleClickZoom: false,
+    scrollWheelZoom: false,
+    boxZoom: false,
+    keyboard: false,
+  });
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+  }).addTo(mapInstance.value);
+
+  markerLayer.value = L.layerGroup().addTo(mapInstance.value);
+
+  updateMapLocation();
+}
+
+function updateMapLocation() {
+  if (!mapInstance.value || !photoLocation.value || !Leaflet) return;
+
+  const { lat, lng } = photoLocation.value;
+  mapInstance.value.setView([lat, lng], 14);
+
+  markerLayer.value.clearLayers();
+
+  const imageSource = getThumbnailUrl(props.photo);
+  const icon = Leaflet.divIcon({
+    html: `<div class="photo-map-pin" style="background-image: url('${imageSource}')"></div>`,
+    className: 'photo-pin-container',
+    iconSize: [48, 48],
+    iconAnchor: [24, 24],
+  });
+
+  Leaflet.marker([lat, lng], { icon }).addTo(markerLayer.value);
+}
+
+function openMapPage() {
+  if (photoLocation.value) {
+    router.push({
+      path: '/map',
+      query: {
+        lat: photoLocation.value.lat,
+        lng: photoLocation.value.lng,
+        id: props.photo.id,
+        zoom: 16
+      }
+    });
+  } else {
+    router.push('/map');
+  }
+  closeModal();
+}
+
 const showInfoPanel = ref(true);
 const infoPanelTransition = createCollapseTransition({
   duration: 280,
@@ -441,12 +501,6 @@ const aiKeywords = computed(() => {
 });
 
 const ratingStars = [1, 2, 3, 4, 5];
-const ratingLabel = computed(() => {
-  if (!detailsForm.rating) {
-    return 'Not rated';
-  }
-  return `${detailsForm.rating} / 5`;
-});
 
 const copyingImage = ref(false);
 const copyFeedback = ref('');
@@ -487,6 +541,17 @@ function handleKeydown(event) {
   if (!isOpen.value) {
     return;
   }
+
+  // Ignore navigation shortcuts if user is typing in an input
+  const target = event.target;
+  const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+  if (isInput) {
+    if (event.key === 'Escape') {
+      target.blur();
+    }
+    return;
+  }
+
   if (event.key === 'ArrowLeft') {
     event.preventDefault();
     navigatePrevious();
@@ -514,6 +579,37 @@ function formatKeywordScore(score) {
   return `${Math.round(score * 100)}%`;
 }
 
+function getAlbumCover(album) {
+  if (!album || !Array.isArray(album.photos) || !album.photos.length) {
+    return null;
+  }
+  const cover = album.photos.find((photo) => photo.id === album.coverPhotoId) || album.photos[0];
+  return getThumbnailUrl(cover);
+}
+
+function handleRemoveTag(index) {
+  removeTagAt(index);
+  saveDetails();
+}
+
+function handleCommitTag() {
+  commitTagInput();
+  saveDetails();
+}
+
+function handleTagInputKeydownWrapper(event) {
+  if (event.key === 'Enter' || event.key === ',') {
+    event.preventDefault();
+    handleCommitTag();
+    return;
+  }
+  handleTagInputKeydown(event);
+  if (event.key === 'Backspace' && !detailsForm.newTag) {
+    // If backspace removed a tag, save
+    saveDetails();
+  }
+}
+
 function closeModal() {
   isOpen.value = false;
   if (copyFeedbackTimer) {
@@ -522,18 +618,6 @@ function closeModal() {
   }
   copyFeedback.value = '';
   copyingImage.value = false;
-}
-
-function setRating(value) {
-  if (!value || value < 1 || value > 5) {
-    detailsForm.rating = null;
-    return;
-  }
-  detailsForm.rating = detailsForm.rating === value ? null : value;
-}
-
-function clearRating() {
-  detailsForm.rating = null;
 }
 
 function showCopyFeedback(message) {
@@ -612,13 +696,17 @@ function openOriginalFile() {
   }
 }
 
-function openRawFile() {
+async function openRawFile() {
   if (!props.photo || !props.photo.rawFilePath) {
     return;
   }
   const url = toFileUrl(props.photo.rawFilePath);
   if (url) {
-    window.open(url, '_blank');
+    if (photoAlbumBridge.value) {
+      await photoAlbumBridge.value.openExternal(url);
+    } else {
+      window.open(url, '_blank');
+    }
   }
 }
 
@@ -628,6 +716,22 @@ watch(
     syncDetailsForm(photo);
   },
   { immediate: true },
+);
+
+watch(
+  [() => photoLocation.value, showInfoPanel],
+  async ([loc, show]) => {
+    if (loc && show) {
+      await nextTick();
+      if (!mapInstance.value) {
+        await initMap();
+      } else {
+        mapInstance.value.invalidateSize();
+        updateMapLocation();
+      }
+    }
+  },
+  { immediate: true }
 );
 
 watch(isOpen, (open) => {
@@ -655,6 +759,9 @@ watch(isOpen, (open) => {
 });
 
 onBeforeUnmount(() => {
+  if (mapInstance.value) {
+    mapInstance.value.remove();
+  }
   if (copyFeedbackTimer) {
     clearTimeout(copyFeedbackTimer);
     copyFeedbackTimer = null;
@@ -778,12 +885,32 @@ onBeforeUnmount(() => {
   overflow: hidden;
   border: 1px solid rgba(15, 23, 42, 0.08);
   height: 180px;
+  cursor: pointer;
+  position: relative;
+  z-index: 0;
 }
 
-.photo-map iframe {
+.photo-map-preview {
   width: 100%;
   height: 100%;
-  border: 0;
+}
+
+:deep(.photo-pin-container) {
+  background: transparent;
+  border: none;
+}
+
+:deep(.photo-map-pin) {
+  width: 100%;
+  height: 100%;
+  border-radius: 9999px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  background: rgba(0, 201, 81, 0.65);
+  background-size: cover;
+  background-position: center;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 4px 15px rgba(0, 201, 81, 0.25);
 }
 
 .rating-control {

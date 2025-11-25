@@ -26,7 +26,10 @@
       <div class="album-section-header">
         <div>
           <p class="album-section-title">{{ section.label }}</p>
-          <p class="album-section-subtitle">{{ section.photos.length }} photo<span v-if="section.photos.length !== 1">s</span></p>
+          <p class="album-section-subtitle">
+            {{ section.photos.length }} photo<span v-if="section.photos.length !== 1">s</span>
+            <span v-if="section.cityLabel"> | {{ section.cityLabel }}</span>
+          </p>
         </div>
       </div>
       <div class="album-photo-grid">
@@ -55,6 +58,7 @@
               {{ getPhotoBadgeLabel(photo) }}
             </span>
             <button
+              v-if="showActions"
               type="button"
               class="favorite-button"
               :class="{ 'favorite-active': isFavorite(photo) }"
@@ -68,12 +72,12 @@
             </button>
           </div>
           <div class="album-photo-meta">
-            
+
             <div class="album-photo-meta-content">
               <p class="album-photo-name">{{ photo.fileName }}</p>
               <p class="album-photo-subtitle">{{ formatTime(photo.shootDateTime) }}</p>
             </div>
-            <UDropdownMenu :items="getPhotoMenuItems(photo)">
+            <UDropdownMenu v-if="showActions" :items="getPhotoMenuItems(photo)">
               <button
                 type="button"
                 class="photo-menu-trigger"
@@ -155,6 +159,10 @@ const props = defineProps({
     type: [String, Number],
     default: null,
   },
+  showActions: {
+    type: Boolean,
+    default: true,
+  },
 });
 
 const emit = defineEmits(['load-more', 'select-photo', 'visible-date-change', 'toggle-favorite', 'copy-photo', 'add-to-album', 'remove-from-album']);
@@ -184,12 +192,59 @@ function groupByDay(list = []) {
       return;
     }
     if (!bucket.has(key)) {
-      bucket.set(key, { key, label: formatDateLabel(key), photos: [] });
+      bucket.set(key, { key, label: formatDateLabel(key), photos: [], cityLabel: null });
       groups.push(bucket.get(key));
     }
     bucket.get(key).photos.push(photo);
   });
+  groups.forEach((section) => {
+    section.cityLabel = computeSectionCityLabel(section.photos);
+  });
   return groups;
+}
+
+function computeSectionCityLabel(photos = []) {
+  const counts = new Map();
+  photos.forEach((photo) => {
+    const city = extractCityFromPhoto(photo);
+    if (!city) {
+      return;
+    }
+    const normalized = city.toLowerCase();
+    const entry = counts.get(normalized);
+    if (entry) {
+      entry.count += 1;
+    } else {
+      counts.set(normalized, { label: city, count: 1 });
+    }
+  });
+
+  if (!counts.size) {
+    return null;
+  }
+
+  let best = null;
+  counts.forEach((entry) => {
+    if (
+      !best
+      || entry.count > best.count
+      || (entry.count === best.count && entry.label.localeCompare(best.label) < 0)
+    ) {
+      best = entry;
+    }
+  });
+
+  return best?.label || null;
+}
+
+function extractCityFromPhoto(photo) {
+  const label = typeof photo?.locationLabel === 'string' ? photo.locationLabel.trim() : '';
+  if (!label) {
+    return null;
+  }
+  const [cityPart] = label.split(',');
+  const city = cityPart.trim();
+  return city || null;
 }
 
 function getDateKey(input) {
@@ -264,6 +319,9 @@ function toggleFavorite(photo) {
 }
 
 function getPhotoMenuItems(photo) {
+  if (!props.showActions) {
+    return [];
+  }
   const items = [
     {
       label: 'Copy photo',
@@ -484,6 +542,10 @@ defineExpose({
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .album-section {
@@ -517,6 +579,8 @@ defineExpose({
   display: grid;
   gap: 0.75rem;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .album-photo-card {

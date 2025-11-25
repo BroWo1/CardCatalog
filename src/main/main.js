@@ -3,7 +3,7 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const { fileURLToPath } = require('node:url');
-const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeImage, shell } = require('electron');
 const { IPC_CHANNELS } = require('../shared/ipc-api');
 const sdDetector = require('./sd-detector');
 const fileScanner = require('./file-scanner');
@@ -11,6 +11,7 @@ const db = require('./db');
 const processingQueue = require('./processing-queue');
 const statsAggregator = require('./stats-aggregator');
 const { generateTextEmbedding } = require('./workers/clip-keywords');
+const hnswIndex = require('./hnsw-index');
 
 let mainWindow;
 let volumeMonitoringStarted = false;
@@ -19,6 +20,7 @@ let lastScanProgressEvent = 0;
 let hasHandledInitialVolumeBroadcast = false;
 const pendingAutoScanVolumeIds = [];
 let autoScanQueueProcessing = false;
+let hnswManager = null;
 
 const SCAN_PROGRESS_EVENT_INTERVAL_MS = 400;
 const isMac = process.platform === 'darwin';
@@ -124,6 +126,46 @@ function findBundledClipModelDir() {
   const found = candidates.find((candidate) => clipModelDirHasAssets(candidate)) || null;
   logClip('info', 'Evaluated CLIP model search candidates', { candidates, found });
   return found;
+}
+
+async function initializeHnswIndex() {
+  try {
+    const userDataPath = app.getPath('userData');
+    const indexPath = path.join(userDataPath, 'hnsw-index.bin');
+    const storedPreference = db.getHnswMetadata('useHnsw');
+    const photoCount = db.countPhotos();
+    let enableHnsw = storedPreference == null ? photoCount > 1000 : storedPreference === '1';
+    if (storedPreference == null) {
+      db.setHnswMetadata('useHnsw', enableHnsw ? '1' : '0');
+    }
+    hnswManager = await hnswIndex.initializeHnswIndexManager({
+      indexFilePath: indexPath,
+      space: 'cosine',
+      numDimensions: 512,
+      maxElements: 100000,
+      m: 16,
+      efConstruction: 200,
+      efSearch: 50,
+      providers: {
+        fetchEmbeddingsBatch: (options) => db.getPhotoEmbeddingsBatch(options),
+        fetchPendingEmbeddings: (options = {}) =>
+          db.getPhotoEmbeddingsBatch({ ...options, onlyPending: true }),
+        markIndexed: (ids) => db.markPhotosHnswIndexed(ids, true),
+        resetIndexFlags: () => db.resetHnswIndexFlags(),
+        getMetadata: (key) => db.getHnswMetadata(key),
+        setMetadata: (key, value) => db.setHnswMetadata(key, value),
+      },
+    });
+    if (hnswManager && typeof hnswManager.setEnabled === 'function') {
+      hnswManager.setEnabled(enableHnsw);
+    }
+    console.info('[HNSW] Index initialized', {
+      enabled: enableHnsw,
+      photoCount,
+    });
+  } catch (error) {
+    console.warn('[HNSW] Failed to initialize vector index', error);
+  }
 }
 
 async function ensureClipModelResourcesRoot(appInstance) {
@@ -363,6 +405,14 @@ function registerIpcHandlers() {
   );
 
   ipcMain.handle(
+    IPC_CHANNELS.FETCH_PHOTO_LOCATIONS,
+    withErrorLogging(IPC_CHANNELS.FETCH_PHOTO_LOCATIONS, async (_event, filter = {}) => {
+      const safeFilter = filter && typeof filter === 'object' ? filter : {};
+      return db.getPhotoLocations(safeFilter);
+    }),
+  );
+
+  ipcMain.handle(
     IPC_CHANNELS.FETCH_STATS,
     withErrorLogging(IPC_CHANNELS.FETCH_STATS, async (_event, filter = {}) => {
       const safeFilter = filter && typeof filter === 'object' ? filter : {};
@@ -465,6 +515,17 @@ function registerIpcHandlers() {
       }
       const deletedCount = db.deletePhotos(photoIds);
       return { deletedCount };
+    }),
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.OPEN_EXTERNAL,
+    withErrorLogging(IPC_CHANNELS.OPEN_EXTERNAL, async (_event, url) => {
+      if (!url || typeof url !== 'string') {
+        throw new Error('URL is required');
+      }
+      await shell.openExternal(url);
+      return true;
     }),
   );
 }
@@ -588,6 +649,9 @@ function handleMetadataResult(result) {
         patch.metadata_signature = result.metadataSignature;
       }
       db.updatePhotoMetadataByPath(result.volumeId, result.filePath, patch);
+      if (Array.isArray(result.metadata.embedding) && hnswManager && typeof hnswManager.requestSync === 'function') {
+        hnswManager.requestSync();
+      }
     } catch (error) {
       console.error('Failed to update photo metadata', error);
     }
@@ -790,6 +854,7 @@ async function processPendingAutoScanQueue() {
 app.whenReady().then(async () => {
   try {
     await db.initDb(app);
+    await initializeHnswIndex();
   } catch (error) {
     console.error('Failed to initialize database', error);
     app.quit();
@@ -838,6 +903,9 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  hnswIndex.shutdownHnswIndex().catch((error) => {
+    console.warn('[HNSW] Failed to flush index before exit', error);
+  });
   db.shutdown();
   processingQueue.shutdown();
 });

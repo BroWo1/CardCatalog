@@ -7,6 +7,7 @@ const IPC_CHANNELS = {
   SCAN_PROGRESS: 'scan:progress',
   VOLUME_CHANGED: 'volume:changed',
   FETCH_PHOTOS: 'photos:fetch',
+  FETCH_PHOTO_LOCATIONS: 'photos:locations',
   FETCH_STATS: 'stats:fetch',
   FETCH_AI_COLLECTIONS: 'ai:collections',
   FETCH_CITY_COLLECTIONS: 'city:collections',
@@ -14,6 +15,7 @@ const IPC_CHANNELS = {
   DELETE_PHOTOS: 'photo:delete',
   COPY_IMAGE_TO_CLIPBOARD: 'photo:copy-image',
   REGENERATE_AI_LABELS: 'scan:regenerate-ai-labels',
+  OPEN_EXTERNAL: 'app:open-external',
 };
 
 /**
@@ -23,6 +25,7 @@ const IPC_CHANNELS = {
  * @typedef {import('./types').PhotoQuery} PhotoQuery
  * @typedef {import('./types').PhotoFilter} PhotoFilter
  * @typedef {import('./types').PhotoResults} PhotoResults
+ * @typedef {import('./types').PhotoLocationResults} PhotoLocationResults
  * @typedef {import('./types').StatsPayload} StatsPayload
  * @typedef {import('./types').AiCollection} AiCollection
  * @typedef {import('./types').CityCollection} CityCollection
@@ -37,6 +40,7 @@ const IPC_CHANNELS = {
  * @property {(volumeId: string) => Promise<void>} startScan
  * @property {(callback: (progress: ScanProgress) => void) => () => void} onScanProgress
  * @property {(filter?: PhotoFilter) => Promise<PhotoResults>} fetchPhotos
+ * @property {(filter?: PhotoFilter) => Promise<PhotoLocationResults>} fetchPhotoLocations
  * @property {(filter: PhotoFilter) => Promise<StatsPayload>} fetchStats
  * @property {(options?: { minCount?: number }) => Promise<AiCollection[]>} fetchAiCollections
  * @property {(options?: { minCount?: number }) => Promise<CityCollection[]>} fetchCityCollections

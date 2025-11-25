@@ -104,6 +104,7 @@ const KEYWORD_CANDIDATES = [
   'crowd gathering',
   'wedding ceremony',
   'stage performance',        // Concerts/Theater
+  'sports event',
 
   // --- SUBJECTS & MACRO ---
   'wildlife animal',
@@ -113,7 +114,8 @@ const KEYWORD_CANDIDATES = [
   'macro close-up',           // General small details
   'food gourmet',
   'coffee cafe',
-  'abstract pattern'          // Textures/Lines
+  'abstract pattern',          // Textures/Lines
+  'museum exhibit',
 ];
 
 let clipResourcesPromise = null;

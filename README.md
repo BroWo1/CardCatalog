@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="src/assets/CCLogo.png" alt="CardCatalog Logo" width="150">
+  <img src="src/assets/AnimeLogo.png" alt="CardCatalog Logo" width="200">
 </p>
 
 <h1 align="center">Card Catalog <br><br></h1>
 
-<img src="src/assets/screenshot.png" alt="CardCatalog Screenshot" width="100%">
+<img src="src/assets/ccposter3.png" alt="CardCatalog Screenshot" width="100%">
 
 **CardCatalog** is a smart, local-first desktop application for photographers to catalog, search, and visualize their photo collections. Built with Electron and Nuxt, it runs entirely offline and uses local AI to help you find your best shots.
 
@@ -12,7 +12,7 @@
 
 ## ✨ Key Features
 
-### 🧠 Smart AI Search (Offline)
+### 🧠 Smart AI Context Search
 
 * **Semantic Search:** Find photos by describing them (e.g., "sunset at the beach", "dog playing in snow") using local CLIP models.
 * **Auto-Tagging:** Automatically generates keywords for your photos without sending data to the cloud.
@@ -31,6 +31,11 @@ Drill down into your library with precision filters:
 * **Gear:** Filter by specific Camera Bodies or Lenses.
 * **Settings:** Filter by ISO, Aperture, and Focal Length ranges.
 * **Time:** Jump to specific dates with the interactive Timeline Rail.
+
+### 🗺️ Interactive Map
+
+* **OpenStreetMap View:** Browse every geotagged photo on a dedicated map page with full-resolution thumbnails as pins.
+* **Smart Clusters:** Pins automatically group together as you zoom out so dense trips stay readable.
 
 ### 📊 Insights & Stats
 

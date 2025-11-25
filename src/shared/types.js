@@ -63,6 +63,23 @@
 */
 
 /**
+ * @typedef {Object} PhotoLocation
+ * @property {string|number} id
+ * @property {string} volumeId
+ * @property {number} gpsLat
+ * @property {number} gpsLng
+ * @property {string|null} [thumbnailPath]
+ * @property {string} filePath
+ * @property {string|null} [shootDateTime]
+ */
+
+/**
+ * @typedef {Object} PhotoLocationResults
+ * @property {PhotoLocation[]} items
+ * @property {number} total
+ */
+
+/**
  * @typedef {Object} AiLabel
  * @property {string} label
  * @property {number} score
@@ -101,6 +118,7 @@
 
 /**
  * @typedef {Object} PhotoFilter
+ * @property {(string|number)[]} [ids]
  * @property {string} [volumeId]
  * @property {string[]} [cameraModels]
  * @property {string[]} [lensModels]

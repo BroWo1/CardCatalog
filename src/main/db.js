@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const initSqlJs = require('sql.js');
+const { getHnswIndexManager } = require('./hnsw-index');
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 10;
 const PERSIST_DEBOUNCE_MS = 1000;
 
 let SQL = null;
@@ -16,6 +17,40 @@ const MAX_PAGE_SIZE = 500;
 const DEFAULT_MIN_SEMANTIC_SCORE = 0.25;
 const DEFAULT_AI_COLLECTION_MIN_COUNT = 10;
 const DEFAULT_CITY_COLLECTION_MIN_COUNT = 10;
+const HNSW_NEIGHBOR_MULTIPLIER = 5;
+const HNSW_MIN_NEIGHBORS = 200;
+const HNSW_MAX_NEIGHBORS = 10000;
+
+const PHOTO_DETAIL_COLUMNS = `
+  id,
+  volume_id AS volumeId,
+  file_path AS filePath,
+  file_name AS fileName,
+  file_size_bytes AS fileSizeBytes,
+  raw_file_path AS rawFilePath,
+  thumbnail_path AS thumbnailPath,
+  shoot_datetime AS shootDateTime,
+  camera_make AS cameraMake,
+  camera_model AS cameraModel,
+  lens_model AS lensModel,
+  iso,
+  focal_length_mm AS focalLengthMm,
+  aperture,
+  shutter_speed_s AS shutterSpeedSeconds,
+  format,
+  gps_lat AS gpsLat,
+  gps_lng AS gpsLng,
+  description,
+  tags,
+  ai_labels AS aiLabels,
+  location_label AS locationLabel,
+  rating,
+  CASE
+    WHEN raw_file_path IS NOT NULL THEN 1
+    WHEN format IS NOT NULL AND LOWER(format) IN ('arw','cr2','cr3','nef','orf','raf','rw2','dng','srw') THEN 1
+    ELSE 0
+  END AS isRaw
+`;
 
 function canonicalizeLocationLabel(rawLabel) {
   if (!rawLabel || typeof rawLabel !== 'string') {
@@ -157,6 +192,48 @@ function deserializeAiLabels(value) {
   return normalizeAiLabelArray(value);
 }
 
+function deserializeEmbeddingValue(value) {
+  if (!value) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value instanceof Uint8Array) {
+    try {
+      const text = Buffer.from(value).toString('utf8');
+      return JSON.parse(text);
+    } catch (_error) {
+      return null;
+    }
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    try {
+      return JSON.parse(trimmed);
+    } catch (_error) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function hydratePhotoRow(row) {
+  if (!row) {
+    return null;
+  }
+  row.tags = deserializeTags(row.tags);
+  row.aiLabels = deserializeAiLabels(row.aiLabels);
+  row.description = row.description || null;
+  row.locationLabel = row.locationLabel || null;
+  row.rating = row.rating != null ? Number(row.rating) : null;
+  row.isRaw = Boolean(row.isRaw);
+  return row;
+}
+
 function normalizeDescription(value) {
   if (typeof value !== 'string') {
     return null;
@@ -209,6 +286,20 @@ function buildSortClause(sortBy) {
 function buildFilterClause(filter = {}) {
   const conditions = [];
   const params = [];
+
+  const idFilters = Array.isArray(filter.ids)
+    ? filter.ids
+        .map((value) => {
+          const num = Number(value);
+          return Number.isFinite(num) ? Math.trunc(num) : null;
+        })
+        .filter((value) => value != null)
+    : [];
+  if (idFilters.length) {
+    const placeholders = idFilters.map(() => '?').join(', ');
+    conditions.push(`id IN (${placeholders})`);
+    params.push(...idFilters);
+  }
 
   if (filter.volumeId) {
     conditions.push('volume_id = ?');
@@ -443,9 +534,17 @@ function createSchema() {
       location_label TEXT,
       rating INTEGER,
       embedding BLOB,
+      hnsw_indexed INTEGER DEFAULT 0,
       imported_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       UNIQUE(volume_id, file_path)
+    );
+  `);
+
+  dbInstance.run(`
+    CREATE TABLE IF NOT EXISTS hnsw_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT
     );
   `);
 
@@ -491,6 +590,17 @@ function migrateSchema(currentVersion) {
   }
   if (currentVersion < 8) {
     dbInstance.run('ALTER TABLE photos ADD COLUMN embedding BLOB;');
+  }
+  if (currentVersion < 9) {
+    dbInstance.run('ALTER TABLE photos ADD COLUMN hnsw_indexed INTEGER DEFAULT 0;');
+  }
+  if (currentVersion < 10) {
+    dbInstance.run(`
+      CREATE TABLE IF NOT EXISTS hnsw_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      );
+    `);
   }
   dbInstance.run('UPDATE schema_info SET version = ?;', [SCHEMA_VERSION]);
 }
@@ -559,6 +669,21 @@ function updatePhotoMetadataByPath(volumeId, filePath, patch = {}) {
     throw new Error('Database not initialized');
   }
   const normalizedVolumeId = canonicalizeVolumeId(volumeId);
+  const embeddingIncluded = Object.prototype.hasOwnProperty.call(patch, 'embedding');
+  let targetPhotoId = null;
+  if (embeddingIncluded) {
+    const lookupStmt = dbInstance.prepare(
+      'SELECT id FROM photos WHERE volume_id = ? AND file_path = ? LIMIT 1;',
+    );
+    lookupStmt.bind([normalizedVolumeId, filePath]);
+    if (lookupStmt.step()) {
+      const result = lookupStmt.getAsObject();
+      if (result && result.id != null) {
+        targetPhotoId = result.id;
+      }
+    }
+    lookupStmt.free();
+  }
 
   const columns = {
     camera_make: 'camera_make',
@@ -586,6 +711,7 @@ function updatePhotoMetadataByPath(volumeId, filePath, patch = {}) {
 
   const setClauses = [];
   const params = [];
+  let embeddingUpdated = false;
 
   Object.entries(patch).forEach(([key, value]) => {
     const column = columns[key];
@@ -595,8 +721,13 @@ function updatePhotoMetadataByPath(volumeId, filePath, patch = {}) {
     if (key === 'ai_labels' && value && typeof value !== 'string') {
       value = JSON.stringify(value);
     }
-    if (key === 'embedding' && Array.isArray(value)) {
-      value = JSON.stringify(value);
+    if (key === 'embedding') {
+      embeddingUpdated = true;
+      if (Array.isArray(value)) {
+        value = JSON.stringify(value);
+      } else if (value == null) {
+        value = null;
+      }
     }
     if (key === 'tags') {
       value = serializeTags(value);
@@ -610,6 +741,10 @@ function updatePhotoMetadataByPath(volumeId, filePath, patch = {}) {
 
   if (!setClauses.length) {
     return 0;
+  }
+
+  if (embeddingUpdated) {
+    setClauses.push('hnsw_indexed = 0');
   }
 
   setClauses.push('updated_at = ?');
@@ -628,6 +763,18 @@ function updatePhotoMetadataByPath(volumeId, filePath, patch = {}) {
   stmt.free();
 
   schedulePersist();
+
+  if (embeddingUpdated && targetPhotoId != null) {
+    const manager = getHnswIndexManager();
+    if (manager && typeof manager.handlePhotosRemoved === 'function') {
+      try {
+        manager.handlePhotosRemoved([targetPhotoId]);
+      } catch (_error) {
+        // Ignore index errors; indexer will rebuild if needed
+      }
+    }
+  }
+
   return dbInstance.getRowsModified();
 }
 
@@ -731,49 +878,128 @@ function getPhotos(filter = {}) {
   if (safeFilter.embedding && Array.isArray(safeFilter.embedding)) {
     const queryEmbedding = safeFilter.embedding;
     
-    // For vector search, we want to find photos that match the *meaning* of the query,
-    // even if they don't contain the exact text keywords.
-    // So we exclude the text search params from the SQL filter, relying on the embedding for relevance.
-    // We still respect other filters (date, camera, etc).
     const vectorFilter = { ...safeFilter };
     const similarityThreshold = clampSimilarityThreshold(vectorFilter.minSimilarity);
     delete vectorFilter.minSimilarity;
     delete vectorFilter.searchText;
     delete vectorFilter.text;
-    
-    const { whereClause, params } = buildFilterClause(vectorFilter);
-    
-    // Fetch all candidates (id + embedding) that match other filters
+
+    const filterClause = buildFilterClause(vectorFilter);
+    const filterWhereClause = filterClause.whereClause;
+    const filterParams = filterClause.params;
+
+    const hnswManager = getHnswIndexManager();
+    const canUseHnsw = Boolean(
+      hnswManager &&
+      typeof hnswManager.search === 'function' &&
+      (!hnswManager.isEnabledForSearch || hnswManager.isEnabledForSearch()),
+    );
+    let hnswResults = null;
+    if (canUseHnsw) {
+      const neighborEstimate = Math.min(
+        Math.max(limit * HNSW_NEIGHBOR_MULTIPLIER, HNSW_MIN_NEIGHBORS),
+        HNSW_MAX_NEIGHBORS,
+      );
+      hnswResults = hnswManager.search(queryEmbedding, { k: neighborEstimate });
+    }
+
+    if (Array.isArray(hnswResults)) {
+      const ranked = hnswResults
+        .map((entry) => {
+          const id = Number(entry?.id);
+          const score = Number(entry?.score);
+          return Number.isFinite(id)
+            ? {
+                id,
+                score: Number.isFinite(score) ? score : 0,
+              }
+            : null;
+        })
+        .filter((entry) => entry && entry.score >= similarityThreshold);
+
+      if (!ranked.length) {
+        return {
+          items: [],
+          photos: [],
+          total: 0,
+          totalCount: 0,
+          nextOffset: null,
+          nextCursor: null,
+        };
+      }
+
+      const candidateIds = ranked.map((entry) => entry.id);
+      const placeholders = candidateIds.map(() => '?').join(', ');
+      const whereWithIds = filterWhereClause
+        ? `${filterWhereClause} AND id IN (${placeholders})`
+        : `WHERE id IN (${placeholders})`;
+      const detailStmt = dbInstance.prepare(
+        `
+          SELECT
+            ${PHOTO_DETAIL_COLUMNS}
+          FROM photos
+          ${whereWithIds}
+        `,
+      );
+      detailStmt.bind([...filterParams, ...candidateIds]);
+
+      const rowsMap = new Map();
+      while (detailStmt.step()) {
+        const row = hydratePhotoRow(detailStmt.getAsObject());
+        if (row) {
+          rowsMap.set(row.id, row);
+        }
+      }
+      detailStmt.free();
+
+      const orderedRows = ranked
+        .map((entry) => rowsMap.get(entry.id))
+        .filter(Boolean);
+
+      const total = orderedRows.length;
+      const slice = orderedRows.slice(offset, offset + limit);
+      const nextOffset = offset + slice.length;
+      const hasMore = nextOffset < total;
+      const nextCursor = hasMore ? String(nextOffset) : null;
+
+      return {
+        items: slice,
+        photos: slice,
+        total,
+        totalCount: total,
+        nextOffset: hasMore ? nextOffset : null,
+        nextCursor,
+      };
+    }
+
+    // Fallback to brute-force vector search when HNSW is unavailable
+    const bruteForceFilterClause = filterWhereClause;
     const candidateStmt = dbInstance.prepare(
       `
         SELECT
           id,
           embedding
         FROM photos
-        ${whereClause}
+        ${bruteForceFilterClause}
       `,
     );
-    candidateStmt.bind(params);
-    
+    candidateStmt.bind(filterParams);
+
     const candidates = [];
     while (candidateStmt.step()) {
       const row = candidateStmt.getAsObject();
-      if (row.embedding) {
-        try {
-          const vec = JSON.parse(row.embedding);
-          if (Array.isArray(vec)) {
-            candidates.push({ id: row.id, embedding: vec });
-          }
-        } catch (e) {
-          // Ignore invalid embeddings
-        }
+      if (!row.embedding) {
+        continue;
+      }
+      const vector = deserializeEmbeddingValue(row.embedding);
+      if (Array.isArray(vector)) {
+        candidates.push({ id: row.id, embedding: vector });
       }
     }
     candidateStmt.free();
 
-    // Compute scores
-    candidates.forEach(c => {
-      c.score = cosineSimilarity(queryEmbedding, c.embedding);
+    candidates.forEach((candidate) => {
+      candidate.score = cosineSimilarity(queryEmbedding, candidate.embedding);
     });
 
     const filteredCandidates = candidates
@@ -782,7 +1008,7 @@ function getPhotos(filter = {}) {
 
     const total = filteredCandidates.length;
     const slice = filteredCandidates.slice(offset, offset + limit);
-    const ids = slice.map(c => c.id);
+    const ids = slice.map((candidate) => candidate.id);
 
     if (!ids.length) {
       return {
@@ -795,63 +1021,27 @@ function getPhotos(filter = {}) {
       };
     }
 
-    // Fetch full details for the page
-    const placeholders = ids.map(() => '?').join(',');
+    const placeholders = ids.map(() => '?').join(', ');
     const detailStmt = dbInstance.prepare(
       `
         SELECT
-          id,
-          volume_id AS volumeId,
-          file_path AS filePath,
-          file_name AS fileName,
-          file_size_bytes AS fileSizeBytes,
-          raw_file_path AS rawFilePath,
-          thumbnail_path AS thumbnailPath,
-          shoot_datetime AS shootDateTime,
-          camera_make AS cameraMake,
-          camera_model AS cameraModel,
-          lens_model AS lensModel,
-          iso,
-          focal_length_mm AS focalLengthMm,
-          aperture,
-          shutter_speed_s AS shutterSpeedSeconds,
-          format,
-          gps_lat AS gpsLat,
-          gps_lng AS gpsLng,
-          description,
-          tags,
-          ai_labels AS aiLabels,
-          location_label AS locationLabel,
-          rating,
-          CASE
-            WHEN raw_file_path IS NOT NULL THEN 1
-            WHEN format IS NOT NULL AND LOWER(format) IN ('arw','cr2','cr3','nef','orf','raf','rw2','dng','srw') THEN 1
-            ELSE 0
-          END AS isRaw
+          ${PHOTO_DETAIL_COLUMNS}
         FROM photos
         WHERE id IN (${placeholders})
-      `
+      `,
     );
     detailStmt.bind(ids);
-    
+
     const rowsMap = new Map();
     while (detailStmt.step()) {
-      const row = detailStmt.getAsObject();
+      const row = hydratePhotoRow(detailStmt.getAsObject());
       if (row) {
-        row.tags = deserializeTags(row.tags);
-        row.aiLabels = deserializeAiLabels(row.aiLabels);
-        row.description = row.description || null;
-        row.locationLabel = row.locationLabel || null;
-        row.rating = row.rating != null ? Number(row.rating) : null;
-        row.isRaw = Boolean(row.isRaw);
         rowsMap.set(row.id, row);
       }
     }
     detailStmt.free();
 
-    // Reorder to match sorted IDs
-    const rows = ids.map(id => rowsMap.get(id)).filter(Boolean);
-
+    const rows = ids.map((id) => rowsMap.get(id)).filter(Boolean);
     const nextOffset = offset + rows.length;
     const hasMore = nextOffset < total;
     const nextCursor = hasMore ? String(nextOffset) : null;
@@ -869,34 +1059,7 @@ function getPhotos(filter = {}) {
   const stmt = dbInstance.prepare(
     `
       SELECT
-        id,
-        volume_id AS volumeId,
-        file_path AS filePath,
-        file_name AS fileName,
-        file_size_bytes AS fileSizeBytes,
-        raw_file_path AS rawFilePath,
-        thumbnail_path AS thumbnailPath,
-        shoot_datetime AS shootDateTime,
-        camera_make AS cameraMake,
-        camera_model AS cameraModel,
-        lens_model AS lensModel,
-        iso,
-        focal_length_mm AS focalLengthMm,
-        aperture,
-        shutter_speed_s AS shutterSpeedSeconds,
-        format,
-        gps_lat AS gpsLat,
-        gps_lng AS gpsLng,
-        description,
-        tags,
-        ai_labels AS aiLabels,
-        location_label AS locationLabel,
-        rating,
-        CASE
-          WHEN raw_file_path IS NOT NULL THEN 1
-          WHEN format IS NOT NULL AND LOWER(format) IN ('arw','cr2','cr3','nef','orf','raf','rw2','dng','srw') THEN 1
-          ELSE 0
-        END AS isRaw
+        ${PHOTO_DETAIL_COLUMNS}
       FROM photos
       ${whereClause}
       ${sortClause}
@@ -907,16 +1070,10 @@ function getPhotos(filter = {}) {
   stmt.bind([...params, limit, offset]);
   const rows = [];
   while (stmt.step()) {
-    const row = stmt.getAsObject();
+    const row = hydratePhotoRow(stmt.getAsObject());
     if (row) {
-      row.tags = deserializeTags(row.tags);
-      row.aiLabels = deserializeAiLabels(row.aiLabels);
-      row.description = row.description || null;
-      row.locationLabel = row.locationLabel || null;
-      row.rating = row.rating != null ? Number(row.rating) : null;
-      row.isRaw = Boolean(row.isRaw);
+      rows.push(row);
     }
-    rows.push(row);
   }
   stmt.free();
 
@@ -932,6 +1089,65 @@ function getPhotos(filter = {}) {
     totalCount: total,
     nextOffset: hasMore ? nextOffset : null,
     nextCursor,
+  };
+}
+
+function getPhotoLocations(filter = {}) {
+  if (!dbInstance) {
+    throw new Error('Database not initialized');
+  }
+
+  const safeFilter = filter && typeof filter === 'object' ? filter : {};
+  const { whereClause, params } = buildFilterClause(safeFilter);
+  const locationClause = `(
+    gps_lat IS NOT NULL AND
+    gps_lng IS NOT NULL AND
+    ABS(gps_lat) > 0.0001 AND
+    ABS(gps_lng) > 0.0001
+  )`;
+  const finalWhere = whereClause
+    ? `${whereClause} AND ${locationClause}`
+    : `WHERE ${locationClause}`;
+
+  const stmt = dbInstance.prepare(
+    `
+      SELECT
+        id,
+        volume_id AS volumeId,
+        thumbnail_path AS thumbnailPath,
+        file_path AS filePath,
+        shoot_datetime AS shootDateTime,
+        gps_lat AS gpsLat,
+        gps_lng AS gpsLng
+      FROM photos
+      ${finalWhere}
+      ORDER BY
+        CASE WHEN shoot_datetime IS NULL THEN 1 ELSE 0 END,
+        shoot_datetime DESC,
+        id DESC
+    `,
+  );
+
+  stmt.bind(params);
+
+  const rows = [];
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    rows.push({
+      id: row.id,
+      volumeId: row.volumeId,
+      thumbnailPath: row.thumbnailPath || null,
+      filePath: row.filePath,
+      shootDateTime: row.shootDateTime || null,
+      gpsLat: Number(row.gpsLat),
+      gpsLng: Number(row.gpsLng),
+    });
+  }
+  stmt.free();
+
+  return {
+    items: rows,
+    total: rows.length,
   };
 }
 
@@ -951,6 +1167,14 @@ function deletePhotos(photoIds) {
   const deleted = dbInstance.getRowsModified();
   if (deleted) {
     schedulePersist();
+    const manager = getHnswIndexManager();
+    if (manager && typeof manager.handlePhotosRemoved === 'function') {
+      try {
+        manager.handlePhotosRemoved(photoIds);
+      } catch (_error) {
+        // Ignore index errors; manager will reconcile later if needed
+      }
+    }
   }
   return deleted;
 }
@@ -960,6 +1184,17 @@ function deletePhotosForVolume(volumeId) {
     throw new Error('Database not initialized');
   }
   const normalizedVolumeId = canonicalizeVolumeId(volumeId);
+  const idStmt = dbInstance.prepare('SELECT id FROM photos WHERE volume_id = ?;');
+  idStmt.bind([normalizedVolumeId]);
+  const ids = [];
+  while (idStmt.step()) {
+    const row = idStmt.getAsObject();
+    if (row && row.id != null) {
+      ids.push(row.id);
+    }
+  }
+  idStmt.free();
+
   const stmt = dbInstance.prepare('DELETE FROM photos WHERE volume_id = ?;');
   stmt.bind([normalizedVolumeId]);
   stmt.step();
@@ -967,6 +1202,16 @@ function deletePhotosForVolume(volumeId) {
   const deleted = dbInstance.getRowsModified();
   if (deleted) {
     schedulePersist();
+    if (ids.length) {
+      const manager = getHnswIndexManager();
+      if (manager && typeof manager.handlePhotosRemoved === 'function') {
+        try {
+          manager.handlePhotosRemoved(ids);
+        } catch (_error) {
+          // Ignore index errors
+        }
+      }
+    }
   }
   return deleted;
 }
@@ -976,7 +1221,14 @@ function clearDatabase() {
     throw new Error('Database not initialized');
   }
   dbInstance.run('DELETE FROM photos;');
+  dbInstance.run('DELETE FROM hnsw_metadata;');
   schedulePersist();
+  const manager = getHnswIndexManager();
+  if (manager && typeof manager.handleDatabaseCleared === 'function') {
+    manager.handleDatabaseCleared().catch((error) => {
+      console.warn('[db] Failed to reset HNSW index after clearing database', error);
+    });
+  }
 }
 
 function pruneMissingVolumePhotos(volumeId, currentFilePaths = []) {
@@ -991,29 +1243,34 @@ function pruneMissingVolumePhotos(volumeId, currentFilePaths = []) {
     normalizedPaths.filter((filePath) => typeof filePath === 'string' && filePath.length),
   );
 
-  const stmt = dbInstance.prepare('SELECT file_path FROM photos WHERE volume_id = ?;');
+  const stmt = dbInstance.prepare('SELECT id, file_path FROM photos WHERE volume_id = ?;');
   stmt.bind([normalizedVolumeId]);
-  const stalePaths = [];
+  const staleRecords = [];
   while (stmt.step()) {
     const record = stmt.getAsObject();
     const filePath = record.file_path;
     if (!keepSet.has(filePath)) {
-      stalePaths.push(filePath);
+      staleRecords.push({ id: record.id, filePath });
     }
   }
   stmt.free();
 
-  if (!stalePaths.length) {
+  if (!staleRecords.length) {
     return 0;
   }
 
-  const deleteStmt = dbInstance.prepare('DELETE FROM photos WHERE volume_id = ? AND file_path = ?;');
+  const deleteStmt = dbInstance.prepare('DELETE FROM photos WHERE id = ?;');
   let removed = 0;
+  const removedIds = [];
   try {
-    stalePaths.forEach((filePath) => {
-      deleteStmt.bind([normalizedVolumeId, filePath]);
+    staleRecords.forEach((record) => {
+      deleteStmt.bind([record.id]);
       deleteStmt.step();
-      removed += dbInstance.getRowsModified();
+      const delta = dbInstance.getRowsModified();
+      removed += delta;
+      if (delta > 0 && record.id != null) {
+        removedIds.push(record.id);
+      }
       deleteStmt.reset();
     });
   } finally {
@@ -1022,6 +1279,16 @@ function pruneMissingVolumePhotos(volumeId, currentFilePaths = []) {
 
   if (removed) {
     schedulePersist();
+    if (removedIds.length) {
+      const manager = getHnswIndexManager();
+      if (manager && typeof manager.handlePhotosRemoved === 'function') {
+        try {
+          manager.handlePhotosRemoved(removedIds);
+        } catch (_error) {
+          // Ignore index sync errors
+        }
+      }
+    }
   }
   return removed;
 }
@@ -1352,6 +1619,110 @@ function getPhotosWithoutAiLabels(volumeId, limit = 100) {
   return photos;
 }
 
+function getPhotoEmbeddingsBatch(options = {}) {
+  if (!dbInstance) {
+    throw new Error('Database not initialized');
+  }
+  const limit = Math.max(1, Math.min(Number(options.limit) || 500, 2000));
+  const onlyPending = Boolean(options.onlyPending || options.onlyUnindexed);
+  const afterId = toNumberOrNull(options.afterId);
+  const conditions = ["embedding IS NOT NULL AND TRIM(CAST(embedding AS TEXT)) != ''"];
+  const params = [];
+  if (onlyPending) {
+    conditions.push('hnsw_indexed = 0');
+  }
+  if (afterId != null) {
+    conditions.push('id > ?');
+    params.push(afterId);
+  }
+  const sql = `
+    SELECT id, embedding
+    FROM photos
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY id ASC
+    LIMIT ?
+  `;
+  const stmt = dbInstance.prepare(sql);
+  stmt.bind([...params, limit]);
+  const rows = [];
+  while (stmt.step()) {
+    const record = stmt.getAsObject();
+    const embedding = deserializeEmbeddingValue(record.embedding);
+    if (Array.isArray(embedding)) {
+      rows.push({ id: record.id, embedding });
+    }
+  }
+  stmt.free();
+  return rows;
+}
+
+function markPhotosHnswIndexed(photoIds, isIndexed = true) {
+  if (!dbInstance) {
+    throw new Error('Database not initialized');
+  }
+  if (!Array.isArray(photoIds) || !photoIds.length) {
+    return 0;
+  }
+  const placeholders = photoIds.map(() => '?').join(', ');
+  const stmt = dbInstance.prepare(
+    `UPDATE photos SET hnsw_indexed = ? WHERE id IN (${placeholders});`,
+  );
+  stmt.bind([isIndexed ? 1 : 0, ...photoIds]);
+  stmt.step();
+  stmt.free();
+  schedulePersist();
+  return dbInstance.getRowsModified();
+}
+
+function resetHnswIndexFlags() {
+  if (!dbInstance) {
+    throw new Error('Database not initialized');
+  }
+  dbInstance.run('UPDATE photos SET hnsw_indexed = 0 WHERE embedding IS NOT NULL;');
+  schedulePersist();
+}
+
+function getHnswMetadata(key) {
+  if (!dbInstance || !key) {
+    return null;
+  }
+  const stmt = dbInstance.prepare('SELECT value FROM hnsw_metadata WHERE key = ? LIMIT 1;');
+  stmt.bind([key]);
+  let value = null;
+  if (stmt.step()) {
+    const row = stmt.getAsObject();
+    value = row?.value ?? null;
+  }
+  stmt.free();
+  return value != null ? String(value) : null;
+}
+
+function setHnswMetadata(key, value) {
+  if (!dbInstance || !key) {
+    return false;
+  }
+  if (value == null) {
+    const stmt = dbInstance.prepare('DELETE FROM hnsw_metadata WHERE key = ?;');
+    stmt.bind([key]);
+    stmt.step();
+    stmt.free();
+    schedulePersist();
+    return true;
+  }
+  const stmt = dbInstance.prepare(
+    `
+      INSERT INTO hnsw_metadata(key, value)
+      VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `,
+  );
+  stmt.bind([key, String(value)]);
+  stmt.step();
+  stmt.free();
+  schedulePersist();
+  return true;
+}
+
 module.exports = {
   initDb,
   getDb,
@@ -1359,6 +1730,7 @@ module.exports = {
   updatePhotoMetadataByPath,
   updatePhotoDetails,
   getPhotos,
+  getPhotoLocations,
   deletePhotos,
   deletePhotosForVolume,
   pruneMissingVolumePhotos,
@@ -1366,6 +1738,11 @@ module.exports = {
   getPhotosForStats,
   countPhotos,
   getPhotosWithoutAiLabels,
+  getPhotoEmbeddingsBatch,
+  markPhotosHnswIndexed,
+  resetHnswIndexFlags,
+  getHnswMetadata,
+  setHnswMetadata,
   getAiKeywordCollections,
   getCityCollections,
   clearDatabase,

@@ -10,6 +10,7 @@ const IPC_CHANNELS = {
   SCAN_PROGRESS: 'scan:progress',
   VOLUME_CHANGED: 'volume:changed',
   FETCH_PHOTOS: 'photos:fetch',
+  FETCH_PHOTO_LOCATIONS: 'photos:locations',
   FETCH_STATS: 'stats:fetch',
   FETCH_AI_COLLECTIONS: 'ai:collections',
   FETCH_CITY_COLLECTIONS: 'city:collections',
@@ -17,6 +18,7 @@ const IPC_CHANNELS = {
   DELETE_PHOTOS: 'photo:delete',
   COPY_IMAGE_TO_CLIPBOARD: 'photo:copy-image',
   REGENERATE_AI_LABELS: 'scan:regenerate-ai-labels',
+  OPEN_EXTERNAL: 'app:open-external',
 };
 
 /**
@@ -63,6 +65,9 @@ const photoAlbumApi = {
   },
   async fetchPhotos(filter = {}) {
     return ipcRenderer.invoke(IPC_CHANNELS.FETCH_PHOTOS, filter || {});
+  },
+  async fetchPhotoLocations(filter = {}) {
+    return ipcRenderer.invoke(IPC_CHANNELS.FETCH_PHOTO_LOCATIONS, filter || {});
   },
   async fetchStats(filter = {}) {
     const safeFilter = filter || {};
@@ -118,6 +123,12 @@ const photoAlbumApi = {
       return { deletedCount: 0 };
     }
     return ipcRenderer.invoke(IPC_CHANNELS.DELETE_PHOTOS, photoIds);
+  },
+  async openExternal(url) {
+    if (!url) {
+      throw new Error('URL is required');
+    }
+    return ipcRenderer.invoke(IPC_CHANNELS.OPEN_EXTERNAL, url);
   },
 };
 
