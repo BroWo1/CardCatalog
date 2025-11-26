@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/assets/AnimeLogo.png" alt="CardCatalog Logo" width="200">
+  <img src="src/assets/AnimeLogo.png" alt="CardCatalog Logo" width="250">
 </p>
 
 <h1 align="center">Card Catalog <br><br></h1>
@@ -17,12 +17,14 @@
 * **Semantic Search:** Find photos by describing them (e.g., "sunset at the beach", "dog playing in snow") using local CLIP models.
 * **Auto-Tagging:** Automatically generates keywords for your photos without sending data to the cloud.
 * **Privacy First:** All AI processing happens on your machine.
+<img src="src/assets/contextSearch.png" max-width="600px">
 
 ### 📂 Powerful Organization
 
 * **SD Card & Folder Scanning:** Quickly index photos from removable media or local drives.
 * **Metadata Extraction:** Automatically pulls EXIF data including Camera Model, Lens, ISO, Aperture, and Focal Length.
 * **Geocoding:** Visualizes where your photos were taken.
+<img src="src/assets/organization.png" max-width="600px">
 
 ### 🔍 Advanced Filtering
 
@@ -31,16 +33,19 @@ Drill down into your library with precision filters:
 * **Gear:** Filter by specific Camera Bodies or Lenses.
 * **Settings:** Filter by ISO, Aperture, and Focal Length ranges.
 * **Time:** Jump to specific dates with the interactive Timeline Rail.
+<img src="src/assets/filter.png" max-width="600px">
 
 ### 🗺️ Interactive Map
 
 * **OpenStreetMap View:** Browse every geotagged photo on a dedicated map page with full-resolution thumbnails as pins.
 * **Smart Clusters:** Pins automatically group together as you zoom out so dense trips stay readable.
+<img src="src/assets/map.png" max-width="600px">
 
 ### 📊 Insights & Stats
 
 * **Dashboard:** View statistics about your shooting habits (most used cameras, favorite focal lengths).
 * **Timeline:** Visual distribution of your photo history.
+<img src="src/assets/stats.png" max-width="600px">
 
 ## 🚀 Getting Started
 
