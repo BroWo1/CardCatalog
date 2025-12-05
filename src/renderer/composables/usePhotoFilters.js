@@ -13,6 +13,8 @@ function createDefaultFilter() {
     apertureMax: null,
     focalMin: null,
     focalMax: null,
+    shutterMin: null,
+    shutterMax: null,
     text: '',
     searchText: '',
     semanticSearch: true,

@@ -49,7 +49,17 @@ parentPort.on('message', async (message) => {
     return;
   }
   if (message.type === 'warm') {
-    warmClipModel();
+    warmClipModel()
+      .catch(() => {
+        // Already logged inside warmClipModel
+      })
+      .finally(() => {
+        try {
+          parentPort.postMessage({ type: 'warm-ready' });
+        } catch (_error) {
+          // Ignore if we can't notify
+        }
+      });
     return;
   }
   if (message.type !== 'process') {

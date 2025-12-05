@@ -368,6 +368,24 @@ function buildFilterClause(filter = {}) {
     params.push(focalMax);
   }
 
+  // Shutter speed filter: UI sends denominator (e.g., 250 for 1/250s)
+  // Database stores seconds (e.g., 0.004 for 1/250s)
+  // shutterMin = fastest shutter (largest denominator, smallest seconds value)
+  // shutterMax = slowest shutter (smallest denominator, largest seconds value)
+  const shutterMin = toNumberOrNull(filter.shutterMin);
+  if (shutterMin != null && shutterMin > 0) {
+    // Min denominator = max seconds (slowest allowed)
+    conditions.push('shutter_speed_s <= ?');
+    params.push(1 / shutterMin);
+  }
+
+  const shutterMax = toNumberOrNull(filter.shutterMax);
+  if (shutterMax != null && shutterMax > 0) {
+    // Max denominator = min seconds (fastest allowed)
+    conditions.push('shutter_speed_s >= ?');
+    params.push(1 / shutterMax);
+  }
+
   const searchText = typeof filter.searchText === 'string' ? filter.searchText.trim().toLowerCase() : '';
   const legacyText = typeof filter.text === 'string' ? filter.text.trim().toLowerCase() : '';
   const text = searchText || legacyText;
@@ -1723,6 +1741,33 @@ function setHnswMetadata(key, value) {
   return true;
 }
 
+function getPhotoFilePaths(photoIds) {
+  if (!dbInstance) {
+    throw new Error('Database not initialized');
+  }
+  if (!Array.isArray(photoIds) || !photoIds.length) {
+    return [];
+  }
+
+  const placeholders = photoIds.map(() => '?').join(', ');
+  const stmt = dbInstance.prepare(
+    `SELECT id, file_path AS filePath, raw_file_path AS rawFilePath FROM photos WHERE id IN (${placeholders});`,
+  );
+  stmt.bind(photoIds);
+
+  const results = [];
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    results.push({
+      id: row.id,
+      filePath: row.filePath,
+      rawFilePath: row.rawFilePath || null,
+    });
+  }
+  stmt.free();
+  return results;
+}
+
 module.exports = {
   initDb,
   getDb,
@@ -1733,6 +1778,7 @@ module.exports = {
   getPhotoLocations,
   deletePhotos,
   deletePhotosForVolume,
+  getPhotoFilePaths,
   pruneMissingVolumePhotos,
   isMetadataOutdated,
   getPhotosForStats,

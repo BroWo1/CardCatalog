@@ -16,6 +16,7 @@ const IPC_CHANNELS = {
   COPY_IMAGE_TO_CLIPBOARD: 'photo:copy-image',
   REGENERATE_AI_LABELS: 'scan:regenerate-ai-labels',
   OPEN_EXTERNAL: 'app:open-external',
+  EXPORT_PHOTOS: 'photos:export',
 };
 
 /**

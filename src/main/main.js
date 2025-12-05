@@ -528,6 +528,52 @@ function registerIpcHandlers() {
       return true;
     }),
   );
+
+  ipcMain.handle(
+    IPC_CHANNELS.EXPORT_PHOTOS,
+    withErrorLogging(IPC_CHANNELS.EXPORT_PHOTOS, async (_event, { photoIds }) => {
+      if (!Array.isArray(photoIds) || !photoIds.length) {
+        return { exported: 0, failed: 0, cancelled: true };
+      }
+
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Select Export Destination',
+        properties: ['openDirectory', 'createDirectory'],
+        buttonLabel: 'Export Here',
+      });
+
+      if (result.canceled || !result.filePaths.length) {
+        return { exported: 0, failed: 0, cancelled: true };
+      }
+
+      const destDir = result.filePaths[0];
+      const photos = db.getPhotoFilePaths(photoIds);
+
+      let exported = 0;
+      let failed = 0;
+
+      for (const photo of photos) {
+        const filesToCopy = [photo.filePath];
+        if (photo.rawFilePath) {
+          filesToCopy.push(photo.rawFilePath);
+        }
+
+        for (const srcPath of filesToCopy) {
+          try {
+            const fileName = path.basename(srcPath);
+            const destPath = path.join(destDir, fileName);
+            await fsp.copyFile(srcPath, destPath);
+            exported++;
+          } catch (err) {
+            console.error(`Failed to export ${srcPath}:`, err.message);
+            failed++;
+          }
+        }
+      }
+
+      return { exported, failed, cancelled: false };
+    }),
+  );
 }
 
 function startVolumeScan(volume) {

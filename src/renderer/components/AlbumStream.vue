@@ -38,7 +38,8 @@
           :key="photo.id"
           type="button"
           class="album-photo-card"
-          @click="$emit('select-photo', photo)"
+          :class="{ 'album-photo-card-selected': selectionMode && isSelected(photo) }"
+          @click="handlePhotoClick($event, photo)"
         >
           <div class="album-photo-thumb">
             <img
@@ -58,7 +59,7 @@
               {{ getPhotoBadgeLabel(photo) }}
             </span>
             <button
-              v-if="showActions"
+              v-if="showActions && !selectionMode"
               type="button"
               class="favorite-button"
               :class="{ 'favorite-active': isFavorite(photo) }"
@@ -68,6 +69,21 @@
               <UIcon
                 :name="isFavorite(photo) ? 'i-heroicons-heart-solid' : 'i-heroicons-heart'"
                 class="w-5 h-5"
+              />
+            </button>
+            <button
+              v-if="selectionMode"
+              type="button"
+              class="selection-checkbox"
+              :class="{ 'selection-checkbox-checked': isSelected(photo) }"
+              @click="handleCheckboxClick($event, photo)"
+              :aria-checked="isSelected(photo)"
+              role="checkbox"
+            >
+              <UIcon
+                v-if="isSelected(photo)"
+                name="i-heroicons-check"
+                class="w-3.5 h-3.5"
               />
             </button>
           </div>
@@ -163,9 +179,26 @@ const props = defineProps({
     type: Boolean,
     default: true,
   },
+  selectionMode: {
+    type: Boolean,
+    default: false,
+  },
+  selectedIds: {
+    type: Set,
+    default: () => new Set(),
+  },
 });
 
-const emit = defineEmits(['load-more', 'select-photo', 'visible-date-change', 'toggle-favorite', 'copy-photo', 'add-to-album', 'remove-from-album']);
+const emit = defineEmits([
+  'load-more',
+  'select-photo',
+  'visible-date-change',
+  'toggle-favorite',
+  'copy-photo',
+  'add-to-album',
+  'remove-from-album',
+  'selection-change',
+]);
 
 const sections = computed(() => groupByDay(props.photos));
 
@@ -316,6 +349,69 @@ function isFavorite(photo) {
 
 function toggleFavorite(photo) {
   emit('toggle-favorite', photo);
+}
+
+// Selection functionality
+const lastClickedIndex = ref(null);
+
+function isSelected(photo) {
+  return props.selectedIds.has(photo.id);
+}
+
+function getPhotoIndex(photo) {
+  return props.photos.findIndex((p) => p.id === photo.id);
+}
+
+function handlePhotoClick(event, photo) {
+  if (!props.selectionMode) {
+    emit('select-photo', photo);
+    return;
+  }
+
+  const currentIndex = getPhotoIndex(photo);
+
+  if (event.shiftKey && lastClickedIndex.value !== null) {
+    // Shift-click: select range
+    const start = Math.min(lastClickedIndex.value, currentIndex);
+    const end = Math.max(lastClickedIndex.value, currentIndex);
+    const photosInRange = props.photos.slice(start, end + 1);
+    const idsInRange = photosInRange.map((p) => p.id);
+    emit('selection-change', { action: 'range', ids: idsInRange });
+  } else if (event.metaKey || event.ctrlKey) {
+    // Cmd/Ctrl-click: toggle single item
+    emit('selection-change', { action: 'toggle', ids: [photo.id] });
+    lastClickedIndex.value = currentIndex;
+  } else {
+    // Regular click: select single item (replacing selection)
+    emit('selection-change', { action: 'set', ids: [photo.id] });
+    lastClickedIndex.value = currentIndex;
+  }
+}
+
+function handleCheckboxClick(event, photo) {
+  event.stopPropagation();
+  const currentIndex = getPhotoIndex(photo);
+
+  if (event.shiftKey && lastClickedIndex.value !== null) {
+    const start = Math.min(lastClickedIndex.value, currentIndex);
+    const end = Math.max(lastClickedIndex.value, currentIndex);
+    const photosInRange = props.photos.slice(start, end + 1);
+    const idsInRange = photosInRange.map((p) => p.id);
+    emit('selection-change', { action: 'range', ids: idsInRange });
+  } else {
+    emit('selection-change', { action: 'toggle', ids: [photo.id] });
+    lastClickedIndex.value = currentIndex;
+  }
+}
+
+function selectAll() {
+  const allIds = props.photos.map((p) => p.id);
+  emit('selection-change', { action: 'set', ids: allIds });
+}
+
+function clearSelection() {
+  emit('selection-change', { action: 'clear', ids: [] });
+  lastClickedIndex.value = null;
 }
 
 function getPhotoMenuItems(photo) {
@@ -534,6 +630,8 @@ function compareKeys(key1, key2) {
 
 defineExpose({
   scrollToDateKey,
+  selectAll,
+  clearSelection,
 });
 </script>
 
@@ -821,6 +919,53 @@ defineExpose({
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Selection mode styles */
+.album-photo-card-selected {
+  border-color: rgba(79, 70, 229, 0.8);
+  background: rgba(79, 70, 229, 0.04);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
+.album-photo-card-selected:hover {
+  border-color: rgba(79, 70, 229, 0.9);
+}
+
+.selection-checkbox {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.selection-checkbox:hover {
+  background: rgba(0, 0, 0, 0.5);
+  border-color: #fff;
+  transform: scale(1.05);
+}
+
+.selection-checkbox-checked {
+  background: rgba(79, 70, 229, 0.95);
+  border-color: rgba(79, 70, 229, 0.95);
+}
+
+.selection-checkbox-checked:hover {
+  background: rgba(67, 56, 202, 0.95);
+  border-color: rgba(67, 56, 202, 0.95);
 }
 
 </style>

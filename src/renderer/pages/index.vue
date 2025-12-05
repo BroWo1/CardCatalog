@@ -535,6 +535,40 @@
                     Back to Library
                   </UButton>
                 </div>
+
+                <!-- Selection Toolbar -->
+                <div
+                  v-if="activePrimaryTab === 'album'"
+                  class="selection-toolbar"
+                  :class="{
+                    'selection-toolbar-active': selectionMode,
+                    'selection-toolbar-offset': hasAlbumBanner,
+                  }"
+                >
+                  <UButton
+                    v-if="!selectionMode"
+                    color="gray"
+                    variant="ghost"
+                    size="sm"
+                    icon="i-heroicons-square-2-stack"
+                    @click="toggleSelectionMode"
+                  >
+                    Select
+                  </UButton>
+
+                  <template v-else>
+                    <span class="selection-count">{{ selectedPhotosCount }} selected</span>
+                    <UButton color="gray" variant="link" size="sm" @click="clearSelection">Clear</UButton>
+                    <UButton color="gray" variant="link" size="sm" @click="selectAllPhotos">All</UButton>
+                    <div v-if="selectedPhotosCount > 0" class="selection-actions">
+                      <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-heart" @click="handleBulkFavorite">Favorite</UButton>
+                      <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-folder-plus" @click="handleBulkAddToAlbum">Album</UButton>
+                      <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-arrow-up-tray" @click="handleExportPhotos">Export</UButton>
+                    </div>
+                    <UButton color="primary" variant="soft" size="sm" @click="toggleSelectionMode">Done</UButton>
+                  </template>
+                </div>
+
                 <AlbumStream
                   v-if="activePrimaryTab === 'album'"
                   ref="albumStreamRef"
@@ -548,6 +582,9 @@
                   :get-thumbnail-url="getThumbnailUrl"
                   :showing-all-volumes="showAllVolumes"
                   :available-volume-ids="availableVolumeIds"
+                  :selection-mode="selectionMode"
+                  :selected-ids="selectedPhotoIds"
+                  :active-album-id="activeAlbumId"
                   @load-more="handleAlbumLoadMore"
                   @select-photo="openPhotoModal"
                   @visible-date-change="handleVisibleDateChange"
@@ -555,7 +592,7 @@
                   @copy-photo="handleCopyPhotoAction"
                   @add-to-album="handleAddPhotoToAlbum"
                   @remove-from-album="handleRemoveFromAlbum"
-                  :active-album-id="activeAlbumId"
+                  @selection-change="handleSelectionChange"
                 />
 
                 <!-- Timeline Rail (inside center column) -->
@@ -597,7 +634,7 @@
   <transition name="fade">
     <div v-if="message.text" class="toast-container">
       <UAlert
-        :color="message.tone === 'error' ? 'red' : message.tone === 'success' ? 'green' : 'blue'"
+        :color="message.tone === 'error' ? 'error' : message.tone === 'success' ? 'success' : message.tone === 'warning' ? 'warning' : 'info'"
         variant="solid"
         :title="message.text"
         icon="i-heroicons-sparkles"
@@ -612,7 +649,14 @@
       <div class="album-modal-panel">
         <div>
           <h3 class="album-modal-title">Add to Album</h3>
-          <p class="album-modal-subtitle">Choose an existing album or create a new one for this photo.</p>
+          <p class="album-modal-subtitle">
+            <template v-if="Array.isArray(albumModalPhoto) && albumModalPhoto.length > 1">
+              Add {{ albumModalPhoto.length }} photos to an album.
+            </template>
+            <template v-else>
+              Choose an existing album or create a new one for this photo.
+            </template>
+          </p>
         </div>
         <div class="album-modal-body">
         <UFormGroup label="Existing albums" description="Select an album to reuse" :ui="{ label: 'font-medium text-sm text-slate-600' }">
@@ -634,7 +678,7 @@
         <div class="album-modal-actions">
           <UButton color="gray" variant="ghost" @click="closeAlbumModal">Cancel</UButton>
           <UButton color="primary" :disabled="!canConfirmAlbumModal" @click="confirmAlbumModal">
-            Add photo
+            {{ Array.isArray(albumModalPhoto) && albumModalPhoto.length > 1 ? `Add ${albumModalPhoto.length} photos` : 'Add photo' }}
           </UButton>
         </div>
       </div>
@@ -791,6 +835,10 @@ const albumModalName = ref('');
 const debugConsoleOpen = ref(false);
 const filterExpanded = ref(false);
 const sidebarExpanded = ref(true);
+
+// Selection mode state
+const selectionMode = ref(false);
+const selectedPhotoIds = ref(new Set());
 const sidebarCollapseTransition = createCollapseTransition({ duration: 260, opacityDuration: 200 });
 
 const loadingVolumes = ref(false);
@@ -932,6 +980,12 @@ const searchModeTooltip = computed(() => (
 const activeAlbum = computed(() => albumCollections.value.find((album) => album.id === activeAlbumId.value) || null);
 const isAlbumCollectionView = computed(() => Boolean(activeAlbum.value));
 const isCityCollectionView = computed(() => Boolean(activeCityCollection.value));
+const hasAlbumBanner = computed(() => (
+  isAlbumCollectionView.value
+  || Boolean(activeAiCollection.value)
+  || isFavoritesScope.value
+  || isCityCollectionView.value
+));
 const displayedAlbumPhotos = computed(() => (activeAlbum.value ? activeAlbum.value.photos : albumPhotos.value));
 const albumCollectionsDisplay = computed(() =>
   [...albumCollections.value].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
@@ -1433,12 +1487,106 @@ function handleRemoveFromAlbum(photo) {
 
 function handleDeleteAlbum(albumId) {
   if (!confirm('Are you sure you want to delete this album?')) return;
-  
+
   albumCollections.value = albumCollections.value.filter(a => a.id !== albumId);
   if (activeAlbumId.value === albumId) {
     activeAlbumId.value = null;
   }
   setMessage('Album deleted', 'success');
+}
+
+// Selection mode handlers
+const selectedPhotosCount = computed(() => selectedPhotoIds.value.size);
+
+function toggleSelectionMode() {
+  selectionMode.value = !selectionMode.value;
+  if (!selectionMode.value) {
+    selectedPhotoIds.value = new Set();
+  }
+}
+
+function exitSelectionMode() {
+  selectionMode.value = false;
+  selectedPhotoIds.value = new Set();
+}
+
+function handleSelectionChange({ action, ids }) {
+  const next = new Set(selectedPhotoIds.value);
+
+  if (action === 'clear') {
+    selectedPhotoIds.value = new Set();
+  } else if (action === 'set') {
+    selectedPhotoIds.value = new Set(ids);
+  } else if (action === 'toggle') {
+    ids.forEach((id) => {
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+    });
+    selectedPhotoIds.value = next;
+  } else if (action === 'range') {
+    ids.forEach((id) => next.add(id));
+    selectedPhotoIds.value = next;
+  }
+}
+
+function selectAllPhotos() {
+  albumStreamRef.value?.selectAll();
+}
+
+function clearSelection() {
+  selectedPhotoIds.value = new Set();
+  albumStreamRef.value?.clearSelection();
+}
+
+function getSelectedPhotos() {
+  return displayedAlbumPhotos.value.filter((p) => selectedPhotoIds.value.has(p.id));
+}
+
+function handleBulkAddToAlbum() {
+  const photos = getSelectedPhotos();
+  if (!photos.length) return;
+
+  // Use the first photo for the modal, but we'll add all selected
+  albumModalPhoto.value = photos;
+  const lastAlbumMatch = lastUsedAlbumName.value
+    ? albumCollections.value.find((album) => album.name === lastUsedAlbumName.value)
+    : null;
+  albumModalSelectedId.value = (lastAlbumMatch || albumCollections.value[0] || null)?.id || null;
+  albumModalName.value = albumCollectionOptions.value.length ? '' : (lastUsedAlbumName.value || 'My album');
+  albumModalOpen.value = true;
+}
+
+async function handleBulkFavorite() {
+  const photos = getSelectedPhotos();
+  if (!photos.length) return;
+
+  for (const photo of photos) {
+    await togglePhotoFavorite(photo);
+  }
+  setMessage(`Updated ${photos.length} photo(s)`, 'success');
+  exitSelectionMode();
+}
+
+async function handleExportPhotos() {
+  const photoIds = Array.from(selectedPhotoIds.value);
+  if (!photoIds.length) return;
+
+  try {
+    const result = await window.photoAlbum.exportPhotos(photoIds);
+    if (result.cancelled) return;
+
+    if (result.failed > 0) {
+      setMessage(`Exported ${result.exported} file(s), ${result.failed} failed`, 'warning');
+    } else {
+      setMessage(`Exported ${result.exported} file(s)`, 'success');
+    }
+    exitSelectionMode();
+  } catch (err) {
+    setMessage(`Export failed: ${err.message}`, 'error');
+  }
 }
 
 function handleAddPhotoToAlbum(photo) {
@@ -1459,15 +1607,18 @@ function confirmAlbumModal() {
     setMessage('Select a photo first.', 'error');
     return;
   }
+  const photos = Array.isArray(albumModalPhoto.value) ? albumModalPhoto.value : [albumModalPhoto.value];
   const trimmed = albumModalName.value.trim();
   if (trimmed) {
-    addPhotoToAlbumCollectionByName(trimmed, albumModalPhoto.value);
+    photos.forEach((photo) => addPhotoToAlbumCollectionByName(trimmed, photo));
     closeAlbumModal();
+    if (selectionMode.value) exitSelectionMode();
     return;
   }
   if (albumModalSelectedId.value) {
-    addPhotoToAlbumCollectionById(albumModalSelectedId.value, albumModalPhoto.value);
+    photos.forEach((photo) => addPhotoToAlbumCollectionById(albumModalSelectedId.value, photo));
     closeAlbumModal();
+    if (selectionMode.value) exitSelectionMode();
     return;
   }
   setMessage('Enter or select an album first.', 'error');
@@ -3273,5 +3424,54 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   border: 0;
+}
+
+/* Selection Toolbar */
+.selection-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  width: fit-content;
+  max-width: 5.5rem;
+  margin-left: auto;
+  margin-bottom: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 16px;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+
+}
+
+.selection-toolbar-offset {
+  top: 4.75rem;
+}
+
+.selection-toolbar-active {
+  max-width: 50rem;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+
+.selection-count {
+  font-size: 0.8rem;
+  color: #475569;
+  font-weight: 500;
+  padding: 0 0.25rem;
+  white-space: nowrap;
+}
+
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-left: 0.25rem;
+  border-left: 1px solid rgba(0, 0, 0, 0.08);
 }
 </style>

@@ -19,6 +19,7 @@ const IPC_CHANNELS = {
   COPY_IMAGE_TO_CLIPBOARD: 'photo:copy-image',
   REGENERATE_AI_LABELS: 'scan:regenerate-ai-labels',
   OPEN_EXTERNAL: 'app:open-external',
+  EXPORT_PHOTOS: 'photos:export',
 };
 
 /**
@@ -129,6 +130,12 @@ const photoAlbumApi = {
       throw new Error('URL is required');
     }
     return ipcRenderer.invoke(IPC_CHANNELS.OPEN_EXTERNAL, url);
+  },
+  async exportPhotos(photoIds) {
+    if (!Array.isArray(photoIds) || !photoIds.length) {
+      return { exported: 0, failed: 0, cancelled: true };
+    }
+    return ipcRenderer.invoke(IPC_CHANNELS.EXPORT_PHOTOS, { photoIds });
   },
 };
 

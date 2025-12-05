@@ -182,6 +182,29 @@
                 />
               </div>
             </div>
+
+            <!-- Shutter Speed -->
+            <div class="space-y-1">
+              <label class="metadata-range-label">Shutter Speed (1/x sec)</label>
+              <div class="grid grid-cols-2 gap-2">
+                <UInput 
+                  v-model="shutterMinModel" 
+                  type="number" 
+                  step="1"
+                  placeholder="Slow (e.g. 30)"
+                  size="xs"
+                  class="metadata-input"
+                />
+                <UInput 
+                  v-model="shutterMaxModel" 
+                  type="number" 
+                  step="1"
+                  placeholder="Fast (e.g. 1000)"
+                  size="xs"
+                  class="metadata-input"
+                />
+              </div>
+            </div>
           </div>
           
           <!-- Bottom padding spacer to ensure last element isn't cut off -->
@@ -227,7 +250,8 @@ const hasActiveFilters = computed(() => {
          filterState.dateTo ||
          filterState.isoMin || filterState.isoMax ||
          filterState.apertureMin || filterState.apertureMax ||
-         filterState.focalMin || filterState.focalMax;
+         filterState.focalMin || filterState.focalMax ||
+         filterState.shutterMin || filterState.shutterMax;
 });
 
 // --- Filter Logic (Same as before) ---
@@ -257,6 +281,8 @@ const apertureMinModel = createNumericModel('apertureMin', { decimals: true });
 const apertureMaxModel = createNumericModel('apertureMax', { decimals: true });
 const focalMinModel = createNumericModel('focalMin');
 const focalMaxModel = createNumericModel('focalMax');
+const shutterMinModel = createNumericModel('shutterMin', { decimals: true });
+const shutterMaxModel = createNumericModel('shutterMax', { decimals: true });
 
 function createNumericModel(key, options = {}) {
   const allowDecimals = Boolean(options.decimals);

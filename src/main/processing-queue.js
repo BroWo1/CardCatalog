@@ -4,6 +4,7 @@ const { Worker } = require('worker_threads');
 
 const DEFAULT_MAX_WORKERS = Math.max(1, Math.min(os.cpus().length, 6));
 const workerScript = path.join(__dirname, 'workers', 'exif-worker.js');
+const SPAWN_STAGGER_MS = 600;
 
 let initialized = false;
 let workers = [];
@@ -21,6 +22,10 @@ let sharedOptions = {
 const cancelledJobIds = new Set();
 let logHandler = null;
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function initProcessingQueue(options = {}) {
   if (initialized) {
     return;
@@ -30,10 +35,22 @@ function initProcessingQueue(options = {}) {
   sharedOptions.resourcesPathOverride =
     options.resourcesPathOverride || sharedOptions.resourcesPathOverride;
   const workerCount = options.workerCount || DEFAULT_MAX_WORKERS;
-  for (let i = 0; i < workerCount; i += 1) {
-    spawnWorker();
-  }
   initialized = true;
+  bootstrapWorkers(workerCount);
+}
+
+async function bootstrapWorkers(workerCount) {
+  for (let i = 0; i < workerCount; i += 1) {
+    const { warmReady } = spawnWorker();
+    try {
+      await warmReady;
+    } catch (_error) {
+      // Ignore warm failures; replaceWorker will spawn a new one if needed
+    }
+    if (i < workerCount - 1) {
+      await sleep(SPAWN_STAGGER_MS);
+    }
+  }
 }
 
 function spawnWorker() {
@@ -47,7 +64,26 @@ function spawnWorker() {
     thumbnailBaseDir: sharedOptions.thumbnailBaseDir,
     resourcesPath: sharedOptions.resourcesPathOverride || process.resourcesPath,
   });
-  const info = { worker, busy: false, currentJobId: null, expectedExit: false };
+  const info = { worker, busy: true, currentJobId: null, expectedExit: false };
+  let warmResolved = false;
+  const resolveWarm = () => {
+    if (warmResolved) {
+      return;
+    }
+    warmResolved = true;
+    info.busy = false;
+    dispatchJobs();
+  };
+  const warmReady = new Promise((resolve) => {
+    const onWarmReady = (message) => {
+      if (message && message.type === 'warm-ready') {
+        worker.off('message', onWarmReady);
+        resolveWarm();
+        resolve(true);
+      }
+    };
+    worker.on('message', onWarmReady);
+  });
 
   worker.on('message', (message) => {
     handleWorkerMessage(info, message);
@@ -56,6 +92,7 @@ function spawnWorker() {
   worker.on('error', (error) => {
     console.error('EXIF worker error', error);
     info.busy = false;
+    resolveWarm();
     requeueJobById(info.currentJobId);
     replaceWorker(info);
   });
@@ -69,6 +106,7 @@ function spawnWorker() {
       requeueJobById(info.currentJobId);
       replaceWorker(info);
     }
+    resolveWarm();
   });
 
   workers.push(info);
@@ -76,7 +114,10 @@ function spawnWorker() {
     worker.postMessage({ type: 'warm' });
   } catch (error) {
     console.warn('Failed to warm EXIF worker', error);
+    resolveWarm();
   }
+
+  return { info, warmReady };
 }
 
 function replaceWorker(info) {
@@ -86,7 +127,10 @@ function replaceWorker(info) {
   }
   info.expectedExit = true;
   info.worker.terminate().catch(() => {});
-  spawnWorker();
+  const spawned = spawnWorker();
+  if (spawned && spawned.warmReady) {
+    spawned.warmReady.catch(() => {});
+  }
   dispatchJobs();
 }
 
@@ -228,7 +272,10 @@ function cancelJobsForVolume(volumeId) {
   }
 
   for (let i = 0; i < cancelledActive; i += 1) {
-    spawnWorker();
+    const spawned = spawnWorker();
+    if (spawned && spawned.warmReady) {
+      spawned.warmReady.catch(() => {});
+    }
   }
 
   if (cancelledQueued || cancelledActive) {
