@@ -119,11 +119,15 @@ const photoAlbumApi = {
     }
     return ipcRenderer.invoke(IPC_CHANNELS.REGENERATE_AI_LABELS, { volumeId });
   },
-  async deletePhotos(photoIds) {
+  async deletePhotos(photoIds, options = {}) {
     if (!Array.isArray(photoIds) || !photoIds.length) {
-      return { deletedCount: 0 };
+      return { deletedCount: 0, removedFiles: 0, failedFiles: [] };
     }
-    return ipcRenderer.invoke(IPC_CHANNELS.DELETE_PHOTOS, photoIds);
+    const payload = {
+      photoIds,
+      deleteFiles: Boolean(options.deleteFiles),
+    };
+    return ipcRenderer.invoke(IPC_CHANNELS.DELETE_PHOTOS, payload);
   },
   async openExternal(url) {
     if (!url) {

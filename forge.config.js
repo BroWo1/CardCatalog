@@ -6,10 +6,24 @@ module.exports = {
     asar: {
       unpack: '**/node_modules/{onnxruntime-node,sharp}/**'
     },
-    icon: 'src/assets/CardCatalog.icns',
+    icon: process.platform === 'win32'
+      ? 'src/assets/CardCatalog.ico'
+      : 'src/assets/CardCatalog.icns',
     extraResource: [
       'models'
     ],
+    osxSign: {
+      optionsForFile: (filePath) => {
+        return {
+          entitlements: 'entitlements.plist'
+        };
+      }
+    },
+    osxNotarize: {
+      appleId: 'will.zhangyang.li@gmail.com',
+      appleIdPassword: 'shtd-udhq-pfwk-akbt',
+      teamId: '3TGZ85KSRW'
+    }
   },
   rebuildConfig: {},
   makers: [

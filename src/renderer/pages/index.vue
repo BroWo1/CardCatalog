@@ -540,33 +540,36 @@
                 <div
                   v-if="activePrimaryTab === 'album'"
                   class="selection-toolbar"
+                  ref="selectionToolbarRef"
                   :class="{
                     'selection-toolbar-active': selectionMode,
                     'selection-toolbar-offset': hasAlbumBanner,
                   }"
                 >
-                  <UButton
-                    v-if="!selectionMode"
-                    color="gray"
-                    variant="ghost"
-                    size="sm"
-                    icon="i-heroicons-square-2-stack"
-                    @click="toggleSelectionMode"
-                  >
-                    Select
-                  </UButton>
+                  <div class="selection-toolbar-inner" ref="selectionToolbarInnerRef">
+                    <UButton
+                      v-if="!selectionMode"
+                      color="gray"
+                      variant="ghost"
+                      size="sm"
+                      icon="i-heroicons-square-2-stack"
+                      @click="toggleSelectionMode"
+                    >
+                      Select
+                    </UButton>
 
-                  <template v-else>
-                    <span class="selection-count">{{ selectedPhotosCount }} selected</span>
-                    <UButton color="gray" variant="link" size="sm" @click="clearSelection">Clear</UButton>
-                    <UButton color="gray" variant="link" size="sm" @click="selectAllPhotos">All</UButton>
-                    <div v-if="selectedPhotosCount > 0" class="selection-actions">
-                      <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-heart" @click="handleBulkFavorite">Favorite</UButton>
-                      <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-folder-plus" @click="handleBulkAddToAlbum">Album</UButton>
-                      <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-arrow-up-tray" @click="handleExportPhotos">Export</UButton>
-                    </div>
-                    <UButton color="primary" variant="soft" size="sm" @click="toggleSelectionMode">Done</UButton>
-                  </template>
+                    <template v-else>
+                      <span class="selection-count">{{ selectedPhotosCount }} selected</span>
+                      <UButton color="gray" variant="link" size="sm" @click="clearSelection">Clear</UButton>
+                      <UButton color="gray" variant="link" size="sm" @click="selectAllPhotos">All</UButton>
+                      <div v-if="selectedPhotosCount > 0" class="selection-actions">
+                        <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-heart" @click="handleBulkFavorite">Favorite</UButton>
+                        <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-folder-plus" @click="handleBulkAddToAlbum">Album</UButton>
+                        <UButton color="gray" variant="soft" size="sm" icon="i-heroicons-arrow-up-tray" @click="handleExportPhotos">Export</UButton>
+                      </div>
+                      <UButton color="primary" variant="soft" size="sm" @click="toggleSelectionMode">Done</UButton>
+                    </template>
+                  </div>
                 </div>
 
                 <AlbumStream
@@ -592,6 +595,7 @@
                   @copy-photo="handleCopyPhotoAction"
                   @add-to-album="handleAddPhotoToAlbum"
                   @remove-from-album="handleRemoveFromAlbum"
+                  @delete-photo="promptDeletePhoto"
                   @selection-change="handleSelectionChange"
                 />
 
@@ -679,6 +683,34 @@
           <UButton color="gray" variant="ghost" @click="closeAlbumModal">Cancel</UButton>
           <UButton color="primary" :disabled="!canConfirmAlbumModal" @click="confirmAlbumModal">
             {{ Array.isArray(albumModalPhoto) && albumModalPhoto.length > 1 ? `Add ${albumModalPhoto.length} photos` : 'Add photo' }}
+          </UButton>
+        </div>
+      </div>
+    </template>
+  </UModal>
+
+  <UModal v-model:open="deleteModalOpen" :ui="{ width: 'max-w-lg' }">
+    <template #content>
+      <div class="delete-modal-panel">
+        <div class="delete-modal-icon">
+          <UIcon name="i-heroicons-exclamation-triangle" class="w-6 h-6 text-amber-500" />
+        </div>
+        <div class="delete-modal-body">
+          <h3 class="delete-modal-title">Delete photo?</h3>
+          <p class="delete-modal-text">
+            This removes the photo from your library and deletes the local file from disk. This action cannot be undone.
+          </p>
+          <div v-if="deleteTargetPhoto" class="delete-modal-meta">
+            <p class="delete-modal-name">{{ deleteTargetPhoto.fileName }}</p>
+            <p class="delete-modal-path">{{ deleteTargetPhoto.filePath || deleteTargetPhoto.file_path || 'Path unavailable' }}</p>
+          </div>
+        </div>
+        <div class="delete-modal-actions">
+          <UButton color="gray" variant="ghost" :disabled="deleteInProgress" @click="closeDeleteModal">
+            Cancel
+          </UButton>
+          <UButton color="red" :loading="deleteInProgress" @click="confirmDeletePhoto">
+            Delete photo
           </UButton>
         </div>
       </div>
@@ -832,6 +864,9 @@ const albumModalOpen = ref(false);
 const albumModalPhoto = ref(null);
 const albumModalSelectedId = ref(null);
 const albumModalName = ref('');
+const deleteModalOpen = ref(false);
+const deleteTargetPhoto = ref(null);
+const deleteInProgress = ref(false);
 const debugConsoleOpen = ref(false);
 const filterExpanded = ref(false);
 const sidebarExpanded = ref(true);
@@ -839,6 +874,9 @@ const sidebarExpanded = ref(true);
 // Selection mode state
 const selectionMode = ref(false);
 const selectedPhotoIds = ref(new Set());
+const selectionToolbarRef = ref(null);
+const selectionToolbarInnerRef = ref(null);
+let selectionToolbarTransitionEndHandler = null;
 const sidebarCollapseTransition = createCollapseTransition({ duration: 260, opacityDuration: 200 });
 
 const loadingVolumes = ref(false);
@@ -1495,19 +1533,139 @@ function handleDeleteAlbum(albumId) {
   setMessage('Album deleted', 'success');
 }
 
-// Selection mode handlers
-const selectedPhotosCount = computed(() => selectedPhotoIds.value.size);
+function promptDeletePhoto(photo) {
+  if (!photo) {
+    return;
+  }
+  deleteTargetPhoto.value = photo;
+  deleteModalOpen.value = true;
+  deleteInProgress.value = false;
+}
 
-function toggleSelectionMode() {
-  selectionMode.value = !selectionMode.value;
-  if (!selectionMode.value) {
-    selectedPhotoIds.value = new Set();
+function closeDeleteModal() {
+  deleteModalOpen.value = false;
+  deleteTargetPhoto.value = null;
+  deleteInProgress.value = false;
+}
+
+async function confirmDeletePhoto() {
+  if (!deleteTargetPhoto.value) {
+    closeDeleteModal();
+    return;
+  }
+  if (!photoAlbum.value) {
+    setMessage('Electron bridge unavailable.', 'error');
+    closeDeleteModal();
+    return;
+  }
+
+  const targetId = deleteTargetPhoto.value.id;
+  if (targetId == null) {
+    closeDeleteModal();
+    return;
+  }
+
+  deleteInProgress.value = true;
+  try {
+    const result = await photoAlbum.value.deletePhotos([targetId], { deleteFiles: true });
+    const failed = Array.isArray(result?.failedFiles) ? result.failedFiles : [];
+    const deleted = result?.deletedCount || 0;
+
+    if (deleted > 0) {
+      applyPhotoDeletion([targetId]);
+      const tone = failed.length ? 'warning' : 'success';
+      const fileNote = failed.length
+        ? `, but ${failed.length} file${failed.length === 1 ? '' : 's'} could not be removed from disk`
+        : '';
+      setMessage(`Photo deleted${fileNote}.`, tone);
+      fetchStats({ silent: true });
+    } else {
+      setMessage('Unable to delete photo.', 'error');
+    }
+  } catch (error) {
+    console.error('[confirmDeletePhoto] Error:', error);
+    setMessage(error?.message || 'Failed to delete photo.', 'error');
+  } finally {
+    deleteInProgress.value = false;
+    closeDeleteModal();
   }
 }
 
+// Selection mode handlers
+const selectedPhotosCount = computed(() => selectedPhotoIds.value.size);
+
+function selectionToolbarTargetWidth() {
+  if (typeof window === 'undefined') return null;
+  const container = selectionToolbarRef.value;
+  const inner = selectionToolbarInnerRef.value;
+  if (!container || !inner) return null;
+
+  const styles = window.getComputedStyle(container);
+  const paddingLeft = Number.parseFloat(styles.paddingLeft) || 0;
+  const paddingRight = Number.parseFloat(styles.paddingRight) || 0;
+  const borderLeft = Number.parseFloat(styles.borderLeftWidth) || 0;
+  const borderRight = Number.parseFloat(styles.borderRightWidth) || 0;
+
+  return inner.offsetWidth + paddingLeft + paddingRight + borderLeft + borderRight;
+}
+
+async function setSelectionMode(nextValue) {
+  if (selectionMode.value === nextValue) return;
+
+  const container = selectionToolbarRef.value;
+  const inner = selectionToolbarInnerRef.value;
+  const reduceMotion =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const canAnimate = Boolean(container && inner && !reduceMotion && typeof window !== 'undefined');
+  if (!canAnimate) {
+    selectionMode.value = nextValue;
+    if (!nextValue) selectedPhotoIds.value = new Set();
+    return;
+  }
+
+  const startWidth = container.getBoundingClientRect().width;
+  container.style.width = `${startWidth}px`;
+  void container.offsetWidth;
+
+  selectionMode.value = nextValue;
+  if (!nextValue) selectedPhotoIds.value = new Set();
+  await nextTick();
+
+  const targetWidth = selectionToolbarTargetWidth();
+  if (targetWidth == null) {
+    container.style.width = '';
+    return;
+  }
+
+  if (selectionToolbarTransitionEndHandler) {
+    container.removeEventListener('transitionend', selectionToolbarTransitionEndHandler);
+    selectionToolbarTransitionEndHandler = null;
+  }
+
+  if (Math.abs(targetWidth - startWidth) < 1) {
+    container.style.width = '';
+    return;
+  }
+
+  container.style.width = `${targetWidth}px`;
+  selectionToolbarTransitionEndHandler = (event) => {
+    if (event.propertyName !== 'width') return;
+    container.style.width = '';
+    container.removeEventListener('transitionend', selectionToolbarTransitionEndHandler);
+    selectionToolbarTransitionEndHandler = null;
+  };
+  container.addEventListener('transitionend', selectionToolbarTransitionEndHandler);
+}
+
+function toggleSelectionMode() {
+  void setSelectionMode(!selectionMode.value);
+}
+
 function exitSelectionMode() {
-  selectionMode.value = false;
-  selectedPhotoIds.value = new Set();
+  void setSelectionMode(false);
 }
 
 function handleSelectionChange({ action, ids }) {
@@ -2486,6 +2644,48 @@ function applyPhotoPatch(photoId, patch = {}) {
   }
 }
 
+function applyPhotoDeletion(photoIds = []) {
+  if (!Array.isArray(photoIds) || !photoIds.length) {
+    return;
+  }
+  const removeSet = new Set(photoIds);
+
+  albumPhotos.value = albumPhotos.value.filter((item) => !removeSet.has(item.id));
+  photos.value = photos.value.filter((item) => !removeSet.has(item.id));
+
+  albumCollections.value = albumCollections.value.map((album) => {
+    const originalPhotos = Array.isArray(album.photos) ? album.photos : [];
+    const albumPhotosList = originalPhotos.filter((item) => !removeSet.has(item.id));
+    if (albumPhotosList.length === originalPhotos.length) {
+      return album;
+    }
+    const coverPhotoId = removeSet.has(album.coverPhotoId)
+      ? albumPhotosList[0]?.id || null
+      : album.coverPhotoId;
+    return {
+      ...album,
+      photos: albumPhotosList,
+      coverPhotoId,
+    };
+  });
+
+  const remainingSelected = new Set(
+    Array.from(selectedPhotoIds.value).filter((id) => !removeSet.has(id)),
+  );
+  selectedPhotoIds.value = remainingSelected;
+
+  if (selectedPhoto.value && removeSet.has(selectedPhoto.value.id)) {
+    closePhotoModal();
+  }
+
+  if (albumTotalCount.value) {
+    albumTotalCount.value = Math.max(0, albumTotalCount.value - removeSet.size);
+  }
+  if (photosTotal.value) {
+    photosTotal.value = Math.max(0, photosTotal.value - removeSet.size);
+  }
+}
+
 function buildTimelineFromPhotos(list = []) {
   return list.reduce((acc, photo) => {
     const key = formatDayKeyFromValue(photo?.shootDateTime);
@@ -2882,6 +3082,69 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
+}
+
+.delete-modal-panel {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  border: 1px solid rgba(239, 68, 68, 0.15);
+}
+
+.delete-modal-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: #fef2f2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.delete-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.delete-modal-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #b91c1c;
+}
+
+.delete-modal-text {
+  font-size: 0.95rem;
+  color: #4b5563;
+}
+
+.delete-modal-meta {
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  padding: 0.75rem;
+}
+
+.delete-modal-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.delete-modal-path {
+  font-size: 0.85rem;
+  color: #475569;
+  margin-top: 0.15rem;
+  word-break: break-all;
+}
+
+.delete-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
 }
 
 .modal-icon-button {
@@ -3428,15 +3691,12 @@ onBeforeUnmount(() => {
 
 /* Selection Toolbar */
 .selection-toolbar {
+  box-sizing: border-box;
   position: sticky;
   top: 0;
   z-index: 15;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.5rem;
   width: fit-content;
-  max-width: 5.5rem;
+  max-width: min(50rem, 100%);
   margin-left: auto;
   margin-bottom: 0.5rem;
   padding: 0.35rem 0.5rem;
@@ -3447,7 +3707,17 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
   overflow: hidden;
+  transition: width 220ms cubic-bezier(0.2, 0, 0, 1), box-shadow 200ms ease, top 200ms ease;
+  will-change: width;
+}
 
+.selection-toolbar-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  width: max-content;
+  white-space: nowrap;
 }
 
 .selection-toolbar-offset {
@@ -3455,7 +3725,6 @@ onBeforeUnmount(() => {
 }
 
 .selection-toolbar-active {
-  max-width: 50rem;
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
 }
 
@@ -3473,5 +3742,11 @@ onBeforeUnmount(() => {
   gap: 0.25rem;
   padding-left: 0.25rem;
   border-left: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selection-toolbar {
+    transition: none;
+  }
 }
 </style>

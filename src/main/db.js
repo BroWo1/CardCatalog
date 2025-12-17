@@ -1751,7 +1751,15 @@ function getPhotoFilePaths(photoIds) {
 
   const placeholders = photoIds.map(() => '?').join(', ');
   const stmt = dbInstance.prepare(
-    `SELECT id, file_path AS filePath, raw_file_path AS rawFilePath FROM photos WHERE id IN (${placeholders});`,
+    `
+      SELECT
+        id,
+        file_path AS filePath,
+        raw_file_path AS rawFilePath,
+        thumbnail_path AS thumbnailPath
+      FROM photos
+      WHERE id IN (${placeholders});
+    `,
   );
   stmt.bind(photoIds);
 
@@ -1762,6 +1770,7 @@ function getPhotoFilePaths(photoIds) {
       id: row.id,
       filePath: row.filePath,
       rawFilePath: row.rawFilePath || null,
+      thumbnailPath: row.thumbnailPath || null,
     });
   }
   stmt.free();

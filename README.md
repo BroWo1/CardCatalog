@@ -115,9 +115,20 @@ npm run package
 npm run make
 ```
 
+### Windows x64 build (from an Apple Silicon Mac)
+
+You generally can’t reliably produce a Windows installer from macOS directly (Windows tooling + native module rebuilds). Use a Windows machine/VM/CI runner and build x64 there:
+
+```bash
+npm ci
+npm run make:win:x64
+```
+
+
 ## 👥 Contributors
 
 * **Will Li**
+* **Eric Jia**
 * **GPE Club** 
 
 <img src="src/assets/gpe-anime.png" width="150"> 

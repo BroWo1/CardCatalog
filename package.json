@@ -1,7 +1,7 @@
 {
   "name": "CardCatalog",
-  "version": "1.0.0",
-  "description": "Hello World!",
+  "version": "1.1.0",
+  "description": "High performance local SD card photo album and statistics software.",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron-forge start",
@@ -9,11 +9,16 @@
     "dev:renderer": "npx nuxi dev src/renderer --port 3333",
     "build:renderer": "cross-env NUXT_APP_BASE_URL=./ NUXT_APP_BUILD_ASSETS_DIR=_nuxt/ npx nuxi generate src/renderer",
     "download-models": "node scripts/download-clip-model.js",
-    "prepackage": "npm run download-models",
-    "premake": "npm run download-models",
+    "prepackage": "npm run build:renderer && npm run download-models",
+    "premake": "npm run build:renderer && npm run download-models",
     "test": "echo \"Error: no test specified\" && exit 1",
     "package": "electron-forge package",
-    "make": "electron-forge make"
+    "make": "electron-forge make",
+    "make:mac": "electron-forge make --platform=darwin",
+    "make:win": "electron-forge make --platform=win32",
+    "make:win:x64": "electron-forge make --platform=win32 --arch=x64",
+    "make:mac:signed": "cross-env MAC_SIGN=1 electron-forge make --platform=darwin",
+    "make:mac:notarized": "cross-env MAC_SIGN=1 MAC_NOTARIZE=1 electron-forge make --platform=darwin"
   },
   "author": "Will Li",
   "license": "MIT",
@@ -34,6 +39,7 @@
     "nuxt": "^4.2.1"
   },
   "dependencies": {
+    "@electron/osx-sign": "^2.3.0",
     "@xenova/transformers": "^2.17.2",
     "chart.js": "^4.5.1",
     "drivelist": "^12.0.2",

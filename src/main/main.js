@@ -3,6 +3,8 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const { fileURLToPath } = require('node:url');
+const exifr = require('exifr');
+const { Jimp } = require('jimp');
 const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeImage, shell } = require('electron');
 const { IPC_CHANNELS } = require('../shared/ipc-api');
 const sdDetector = require('./sd-detector');
@@ -269,6 +271,127 @@ function withErrorLogging(channel, handler) {
   };
 }
 
+function normalizeDeleteRequest(payload) {
+  if (Array.isArray(payload)) {
+    const photoIds = payload.filter((value) => typeof value === 'number' || typeof value === 'string');
+    return { photoIds, deleteFiles: false };
+  }
+  if (payload && typeof payload === 'object') {
+    const photoIds = Array.isArray(payload.photoIds)
+      ? payload.photoIds.filter((value) => typeof value === 'number' || typeof value === 'string')
+      : [];
+    const deleteFiles = Boolean(payload.deleteFiles);
+    return { photoIds, deleteFiles };
+  }
+  return { photoIds: [], deleteFiles: false };
+}
+
+async function deleteFilesForRecords(records = []) {
+  const removed = [];
+  const failed = [];
+  const seen = new Set();
+
+  for (const record of records) {
+    const candidates = [
+      record?.filePath,
+      record?.rawFilePath,
+      record?.thumbnailPath,
+    ];
+
+    for (const candidate of candidates) {
+      const filePath = typeof candidate === 'string' ? candidate : '';
+      if (!filePath || seen.has(filePath)) {
+        continue;
+      }
+      seen.add(filePath);
+      try {
+        await fsp.rm(filePath, { force: true });
+        removed.push(filePath);
+      } catch (error) {
+        console.warn('[DeletePhotos] Failed to remove file', filePath, error);
+        failed.push({ path: filePath, error: error?.message || String(error) });
+      }
+    }
+  }
+
+  return { removed, failed };
+}
+
+async function getExifRotation(filePath) {
+  try {
+    const rotation = await exifr.rotation(filePath);
+    const deg = Number(rotation?.deg ?? 0);
+    const scaleX = Number(rotation?.scaleX ?? 1);
+    const scaleY = Number(rotation?.scaleY ?? 1);
+    const dimensionSwapped = Boolean(rotation?.dimensionSwapped);
+
+    if (!Number.isFinite(deg) || !Number.isFinite(scaleX) || !Number.isFinite(scaleY)) {
+      return null;
+    }
+
+    return {
+      deg,
+      scaleX,
+      scaleY,
+      dimensionSwapped,
+    };
+  } catch (error) {
+    console.warn('[Clipboard] Failed to read EXIF rotation', error);
+    return null;
+  }
+}
+
+function applyExifRotationToJimp(image, rotation) {
+  if (!rotation) {
+    return;
+  }
+
+  if (rotation.deg) {
+    // Jimp rotates counter-clockwise; EXIF rotation instructions are expressed as clockwise degrees.
+    image.rotate(-rotation.deg);
+  }
+  if (rotation.scaleX === -1) {
+    image.flip(true, false);
+  }
+  if (rotation.scaleY === -1) {
+    image.flip(false, true);
+  }
+}
+
+async function createNativeImageWithOrientation(filePath) {
+  try {
+    // Jimp auto-applies EXIF orientation on decode (attemptExifRotate), so do not rotate again here.
+    const jimpImage = await Jimp.read(filePath);
+    const buffer = await jimpImage.getBuffer('image/png');
+    return nativeImage.createFromBuffer(buffer);
+  } catch (error) {
+    const rotation = await getExifRotation(filePath);
+    if (!rotation || (rotation.deg === 0 && rotation.scaleX === 1 && rotation.scaleY === 1)) {
+      return nativeImage.createFromPath(filePath);
+    }
+
+    try {
+      const original = nativeImage.createFromPath(filePath);
+      if (original && !original.isEmpty()) {
+        const decodedPng = original.toPNG();
+        const decodedJimp = await Jimp.read(decodedPng);
+        const shouldApplyRotation = rotation.dimensionSwapped
+          ? decodedJimp.bitmap.width >= decodedJimp.bitmap.height
+          : true;
+        if (shouldApplyRotation) {
+          applyExifRotationToJimp(decodedJimp, rotation);
+        }
+        const buffer = await decodedJimp.getBuffer('image/png');
+        return nativeImage.createFromBuffer(buffer);
+      }
+    } catch (fallbackError) {
+      console.warn('[Clipboard] Unable to apply EXIF rotation via fallback decode, using original', fallbackError);
+    }
+    console.warn('[Clipboard] Unable to apply EXIF rotation, using original', error);
+    return nativeImage.createFromPath(filePath);
+  }
+}
+
 function registerIpcHandlers() {
   ipcMain.handle(
     IPC_CHANNELS.LIST_VOLUMES,
@@ -471,8 +594,8 @@ function registerIpcHandlers() {
       if (!fs.existsSync(resolvedPath)) {
         throw new Error('Image file not found.');
       }
-      const image = nativeImage.createFromPath(resolvedPath);
-      if (image.isEmpty()) {
+      const image = await createNativeImageWithOrientation(resolvedPath);
+      if (!image || image.isEmpty()) {
         throw new Error('Unable to read image data.');
       }
       clipboard.writeImage(image);
@@ -509,12 +632,28 @@ function registerIpcHandlers() {
 
   ipcMain.handle(
     IPC_CHANNELS.DELETE_PHOTOS,
-    withErrorLogging(IPC_CHANNELS.DELETE_PHOTOS, async (_event, photoIds) => {
-      if (!Array.isArray(photoIds) || !photoIds.length) {
-        return { deletedCount: 0 };
+    withErrorLogging(IPC_CHANNELS.DELETE_PHOTOS, async (_event, payload) => {
+      const { photoIds, deleteFiles } = normalizeDeleteRequest(payload);
+      if (!photoIds.length) {
+        return { deletedCount: 0, removedFiles: 0, failedFiles: [] };
       }
+
+      let removedFiles = [];
+      let failedFiles = [];
+
+      if (deleteFiles) {
+        const fileRecords = db.getPhotoFilePaths(photoIds);
+        const results = await deleteFilesForRecords(fileRecords);
+        removedFiles = results.removed;
+        failedFiles = results.failed;
+      }
+
       const deletedCount = db.deletePhotos(photoIds);
-      return { deletedCount };
+      return {
+        deletedCount,
+        removedFiles: removedFiles.length,
+        failedFiles,
+      };
     }),
   );
 

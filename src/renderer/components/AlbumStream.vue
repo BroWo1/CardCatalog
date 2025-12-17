@@ -198,6 +198,7 @@ const emit = defineEmits([
   'add-to-album',
   'remove-from-album',
   'selection-change',
+  'delete-photo',
 ]);
 
 const sections = computed(() => groupByDay(props.photos));
@@ -440,6 +441,13 @@ function getPhotoMenuItems(photo) {
       onSelect: () => emit('remove-from-album', photo),
     });
   }
+
+  items.push({
+    label: 'Delete',
+    icon: 'i-heroicons-trash',
+    color: 'error',
+    onSelect: () => emit('delete-photo', photo),
+  });
 
   return [items];
 }

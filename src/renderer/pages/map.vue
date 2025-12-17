@@ -988,7 +988,7 @@ function formatClusterCount(count) {
   background: rgba(0, 201, 81, 0.65);
   background-size: cover;
   background-position: center;
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: transform 0.3s ease;
   border: 1px solid rgba(255, 255, 255, 0.3);
   box-shadow: 0 4px 15px rgba(0, 201, 81, 0.25);
     
@@ -1020,7 +1020,7 @@ function formatClusterCount(count) {
   font-size: 0.9rem;
   border: 1px solid rgba(255, 255, 255, 0.3);
   box-shadow: 0 4px 15px var(--cluster-shadow, rgba(0, 201, 81, 0.25));
-  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: all 0.3s ease;
 }
 
 :global(.photo-cluster:hover) {
@@ -1044,7 +1044,7 @@ function formatClusterCount(count) {
   -webkit-backdrop-filter: blur(6px);
   border: 1px solid rgba(255, 255, 255, 0.3);
   box-shadow: 0 4px 15px rgba(0, 201, 81, 0.25);
-    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform 0.3s ease;
 }
 
 :global(.photo-pin-fallback:hover .photo-pin-placeholder) {

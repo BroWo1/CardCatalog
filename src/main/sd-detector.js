@@ -16,6 +16,33 @@ const SD_CARD_PROTOCOLS = ['SD Card', 'Secure Digital', 'USB'];
 const SD_CARD_TYPES = ['Generic SD', 'Mass Storage Device', 'SD/MMC'];
 const DATA_DIR = path.join(os.homedir(), '.cardcatalog');
 const MANUAL_VOLUMES_PATH = path.join(DATA_DIR, 'manual-volumes.json');
+const WINDOWS_SD_BUS_TYPES = ['sd', 'sdcard', 'mmc'];
+
+function normalizeVolumePathForPlatform(mountPath) {
+  if (!mountPath || typeof mountPath !== 'string') {
+    return null;
+  }
+  if (process.platform !== 'win32') {
+    return mountPath;
+  }
+  const normalized = path.win32.normalize(mountPath);
+  const hasDriveLetter = /^[a-zA-Z]:/.test(normalized);
+  if (hasDriveLetter && !normalized.endsWith(path.win32.sep)) {
+    return `${normalized}${path.win32.sep}`;
+  }
+  return normalized;
+}
+
+function normalizeVolumeIdForPlatform(mountPath) {
+  const normalizedPath = normalizeVolumePathForPlatform(mountPath);
+  if (!normalizedPath) {
+    return null;
+  }
+  if (process.platform === 'win32') {
+    return normalizedPath.toUpperCase();
+  }
+  return normalizedPath;
+}
 
 const state = {
   lastVolumes: [],
@@ -44,10 +71,12 @@ function sanitizeManualVolume(volume = {}) {
   if (!safePath) {
     return null;
   }
-  const label = typeof volume.label === 'string' ? volume.label : path.basename(safePath) || safePath;
+  const normalizedPath = normalizeVolumePathForPlatform(safePath) || safePath;
+  const normalizedId = normalizeVolumeIdForPlatform(normalizedPath) || normalizedPath;
+  const label = typeof volume.label === 'string' ? volume.label : path.basename(normalizedPath) || normalizedPath;
   return {
-    id: safePath,
-    path: safePath,
+    id: normalizedId,
+    path: normalizedPath,
     label,
     isRemovable: Boolean(volume.isRemovable),
     isSystem: Boolean(volume.isSystem),
@@ -181,23 +210,56 @@ function inferLabel(mountpoint, drive) {
     return mountpoint.label;
   }
   const mountPath = mountpoint.path;
+  const driveDescription = drive && (drive.description || drive.displayName);
 
   if (process.platform === 'win32') {
-    return mountPath;
+    if (driveDescription) {
+      return driveDescription;
+    }
+    if (mountPath && typeof mountPath === 'string') {
+      return mountPath;
+    }
   }
 
   if (mountPath && typeof mountPath === 'string') {
     return path.basename(mountPath);
   }
 
-  if (drive && drive.description) {
-    return drive.description;
+  if (driveDescription) {
+    return driveDescription;
   }
 
   return 'External Volume';
 }
 
-function looksLikeSdCard({ isRemovable, sizeBytes, label, path: mountPath, diskInfo }) {
+function looksLikeSdCard({ isRemovable, sizeBytes, label, path: mountPath, diskInfo, driveInfo }) {
+  let removable = isRemovable;
+  if (driveInfo) {
+    const busType = typeof driveInfo.busType === 'string' ? driveInfo.busType.toLowerCase() : '';
+    const driveDescription = typeof driveInfo.description === 'string' ? driveInfo.description.toLowerCase() : '';
+    const driveIsCard = Boolean(driveInfo.isCard);
+    const driveIsRemovable = typeof driveInfo.isRemovable === 'boolean' ? driveInfo.isRemovable : undefined;
+
+    if (driveIsCard) {
+      return true;
+    }
+    if (busType && WINDOWS_SD_BUS_TYPES.some((type) => busType && busType.includes(type))) {
+      return true;
+    }
+    if (driveDescription) {
+      const keywordHit = SD_KEYWORDS.some((keyword) => driveDescription.includes(keyword));
+      if (keywordHit) {
+        return true;
+      }
+      if (SD_CARD_TYPES.some((type) => driveDescription.includes(type.toLowerCase()))) {
+        return true;
+      }
+    }
+    if (driveIsRemovable === true && removable === false) {
+      removable = true;
+    }
+  }
+
   // Enhanced macOS SD card detection - check macOS-specific indicators first
   if (diskInfo) {
     // Check if it's explicitly an SD card reader
@@ -235,13 +297,13 @@ function looksLikeSdCard({ isRemovable, sizeBytes, label, path: mountPath, diskI
   }
 
   // Check if removable and within size range
-  if (isRemovable) {
+  if (removable) {
     const withinSizeRange =
       typeof sizeBytes === 'number' &&
       sizeBytes >= MIN_SD_CARD_BYTES &&
       sizeBytes <= MAX_SD_CARD_BYTES;
 
-    const haystack = [label, mountPath]
+    const haystack = [label, mountPath, driveInfo?.description]
       .filter(Boolean)
       .join(' ')
       .toLowerCase();
@@ -262,19 +324,27 @@ function normalizeDriveToVolumeInfo(drive, macOSDiskInfo = {}) {
     return null;
   }
 
-  const label = inferLabel(mountpoint, drive);
-  const isSystem = Boolean(drive.system);
-  const isRemovable = !isSystem;
-  const sizeBytes = typeof drive.size === 'number' ? drive.size : undefined;
   const mountPath = mountpoint.path;
-  const id = mountPath;
+  const normalizedPath = normalizeVolumePathForPlatform(mountPath);
+  const id = normalizeVolumeIdForPlatform(normalizedPath || mountPath);
+  const label = inferLabel(mountpoint, drive);
+  const isSystem = Boolean(drive.isSystem || drive.system);
+  const driveIsRemovable = typeof drive.isRemovable === 'boolean' ? drive.isRemovable : undefined;
+  const isRemovable = driveIsRemovable != null ? driveIsRemovable : !isSystem;
+  const sizeBytes = typeof drive.size === 'number' ? drive.size : undefined;
 
   // Get macOS-specific disk info for this drive
   const diskInfo = macOSDiskInfo[drive.device];
+  const driveInfo = {
+    isCard: Boolean(drive.isCard),
+    busType: drive.busType,
+    description: drive.description || drive.displayName,
+    isRemovable: driveIsRemovable,
+  };
 
   const volume = {
-    id,
-    path: mountPath,
+    id: id || mountPath,
+    path: normalizedPath || mountPath,
     label,
     isRemovable,
     isSystem,
@@ -283,8 +353,9 @@ function normalizeDriveToVolumeInfo(drive, macOSDiskInfo = {}) {
       isRemovable,
       sizeBytes,
       label,
-      path: mountPath,
+      path: normalizedPath || mountPath,
       diskInfo,
+      driveInfo,
     }),
     raw: drive.device,
   };
@@ -303,7 +374,7 @@ function normalizeDriveToVolumeInfo(drive, macOSDiskInfo = {}) {
     volume.label = 'Home Directory';
   }
 
-  volume.displayLabel = volume.label || mountPath || id;
+  volume.displayLabel = volume.label || volume.path || volume.id;
   return volume;
 }
 
@@ -384,7 +455,7 @@ async function queryVolumes() {
     const drives = await drivelist.list();
     const volumes = drives
       .map((drive) => normalizeDriveToVolumeInfo(drive))
-      .filter((vol) => vol && vol.isLikelySdCard);
+      .filter((vol) => vol && (vol.isLikelySdCard || vol.isRemovable));
 
     const combined = volumes.concat(getManualVolumeCopies());
     return annotateVolumeLabels(combined);
@@ -457,27 +528,29 @@ async function addManualVolume(folderPath) {
   }
   await ensureManualVolumesLoaded();
   const resolvedPath = path.resolve(folderPath);
-  const cached = state.lastVolumes.find((volume) => volume.id === resolvedPath);
+  const normalizedPath = normalizeVolumePathForPlatform(resolvedPath) || resolvedPath;
+  const normalizedId = normalizeVolumeIdForPlatform(normalizedPath) || normalizedPath;
+  const cached = state.lastVolumes.find((volume) => volume.id === normalizedId);
   if (cached) {
     return cached;
   }
-  const existing = state.manualVolumes.find((volume) => volume.id === resolvedPath);
+  const existing = state.manualVolumes.find((volume) => volume.id === normalizedId);
   if (existing) {
     return existing;
   }
   let stats;
   try {
-    stats = await fs.stat(resolvedPath);
+    stats = await fs.stat(normalizedPath);
   } catch (error) {
     throw new Error('Selected folder is not accessible.');
   }
   if (!stats.isDirectory()) {
     throw new Error('Selected path is not a folder.');
   }
-  const label = path.basename(resolvedPath) || resolvedPath;
+  const label = path.basename(normalizedPath) || normalizedPath;
   const manualVolume = {
-    id: resolvedPath,
-    path: resolvedPath,
+    id: normalizedId,
+    path: normalizedPath,
     label,
     isRemovable: false,
     isSystem: false,

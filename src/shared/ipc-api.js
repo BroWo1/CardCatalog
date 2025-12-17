@@ -45,10 +45,10 @@ const IPC_CHANNELS = {
  * @property {(filter: PhotoFilter) => Promise<StatsPayload>} fetchStats
  * @property {(options?: { minCount?: number }) => Promise<AiCollection[]>} fetchAiCollections
  * @property {(options?: { minCount?: number }) => Promise<CityCollection[]>} fetchCityCollections
-  * @property {(callback: (change: VolumeChangeEvent) => void) => () => void} onVolumesChanged
+ * @property {(callback: (change: VolumeChangeEvent) => void) => () => void} onVolumesChanged
  * @property {() => Promise<void>} clearDatabase
  * @property {(photoId: string|number, patch: { description?: string|null, tags?: string[], rating?: number|null }) => Promise<void>} updatePhotoDetails
- * @property {(photoIds: Array<string|number>) => Promise<{deletedCount: number}>} deletePhotos
+ * @property {(photoIds: Array<string|number>, options?: { deleteFiles?: boolean }) => Promise<{deletedCount: number, removedFiles?: number, failedFiles?: Array<{ path: string, error: string }>}>} deletePhotos
  * @property {(filePath: string) => Promise<boolean>} copyImageToClipboard
  */
 

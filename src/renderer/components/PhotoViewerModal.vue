@@ -638,7 +638,12 @@ async function copyImageToClipboard() {
   copyingImage.value = true;
   try {
     const photoBridge = photoAlbumBridge.value;
-    const sourcePath = props.photo?.filePath || props.photo?.rawFilePath || null;
+    const sourcePath =
+      props.photo?.filePath ||
+      props.photo?.file_path ||
+      props.photo?.rawFilePath ||
+      props.photo?.raw_file_path ||
+      null;
     if (photoBridge?.copyImageToClipboard && sourcePath) {
       await photoBridge.copyImageToClipboard(sourcePath);
       showCopyFeedback('Image copied');
