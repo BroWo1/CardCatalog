@@ -1,6 +1,9 @@
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
+const SHOULD_SIGN_MAC = process.platform === 'darwin' && process.env.MAC_SIGN === '1';
+const SHOULD_NOTARIZE_MAC = SHOULD_SIGN_MAC && process.env.MAC_NOTARIZE === '1';
+
 module.exports = {
   packagerConfig: {
     asar: {
@@ -12,18 +15,26 @@ module.exports = {
     extraResource: [
       'models'
     ],
-    osxSign: {
-      optionsForFile: (filePath) => {
-        return {
-          entitlements: 'entitlements.plist'
-        };
-      }
-    },
-    osxNotarize: {
-      appleId: 'will.zhangyang.li@gmail.com',
-      appleIdPassword: 'shtd-udhq-pfwk-akbt',
-      teamId: '3TGZ85KSRW'
-    }
+    ...(SHOULD_SIGN_MAC
+      ? {
+          osxSign: {
+            optionsForFile: () => {
+              return {
+                entitlements: 'entitlements.plist'
+              };
+            }
+          }
+        }
+      : {}),
+    ...(SHOULD_NOTARIZE_MAC
+      ? {
+          osxNotarize: {
+            appleId: process.env.APPLE_ID,
+            appleIdPassword: process.env.APPLE_ID_PASSWORD,
+            teamId: process.env.APPLE_TEAM_ID
+          }
+        }
+      : {})
   },
   rebuildConfig: {},
   makers: [
@@ -33,7 +44,7 @@ module.exports = {
     },
     {
       name: '@electron-forge/maker-zip',
-      platforms: ['darwin'],
+      platforms: ['darwin', 'win32'],
     },
     {
       name: '@electron-forge/maker-deb',
