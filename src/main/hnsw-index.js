@@ -1,6 +1,24 @@
 const fs = require('fs');
 const path = require('path');
-const { HierarchicalNSW } = require('hnswlib-node');
+
+let HierarchicalNSW = null;
+let hnswlibLoadAttempted = false;
+
+function getHierarchicalNSW(logger = console) {
+  if (hnswlibLoadAttempted) {
+    return HierarchicalNSW;
+  }
+  hnswlibLoadAttempted = true;
+  try {
+    ({ HierarchicalNSW } = require('hnswlib-node'));
+  } catch (error) {
+    HierarchicalNSW = null;
+    if (logger && typeof logger.warn === 'function') {
+      logger.warn('[hnsw] hnswlib-node unavailable; vector index disabled', error);
+    }
+  }
+  return HierarchicalNSW;
+}
 
 const INDEX_VERSION = 1;
 const DEFAULT_NUM_DIMENSIONS = 512;
@@ -74,7 +92,11 @@ class HnswIndexManager {
 
   async loadFromDisk() {
     try {
-      this.index = new HierarchicalNSW(this.space, this.numDimensions);
+      const HNSW = getHierarchicalNSW(this.logger);
+      if (!HNSW) {
+        throw new Error('hnswlib-node is unavailable');
+      }
+      this.index = new HNSW(this.space, this.numDimensions);
       this.index.readIndexSync(this.indexFilePath, this.allowReplaceDeleted);
       this.index.setEf(this.efSearch);
       const ids = this.index.getIdsList();
@@ -101,7 +123,11 @@ class HnswIndexManager {
 
   async rebuildFromDatabase() {
     this.logger.info('[hnsw] Rebuilding index from database');
-    this.index = new HierarchicalNSW(this.space, this.numDimensions);
+    const HNSW = getHierarchicalNSW(this.logger);
+    if (!HNSW) {
+      throw new Error('hnswlib-node is unavailable');
+    }
+    this.index = new HNSW(this.space, this.numDimensions);
     this.index.initIndex(this.maxElements, this.m, this.efConstruction, undefined, this.allowReplaceDeleted);
     this.index.setEf(this.efSearch);
     this.knownIds.clear();
@@ -480,6 +506,10 @@ class HnswIndexManager {
 }
 
 async function initializeHnswIndexManager(options = {}) {
+  if (!getHierarchicalNSW(options.logger || console)) {
+    activeManager = null;
+    return null;
+  }
   const manager = new HnswIndexManager(options);
   await manager.initialize();
   activeManager = manager;

@@ -158,6 +158,10 @@ async function initializeHnswIndex() {
         setMetadata: (key, value) => db.setHnswMetadata(key, value),
       },
     });
+    if (!hnswManager) {
+      console.info('[HNSW] Native index unavailable; falling back to brute-force search');
+      return;
+    }
     if (hnswManager && typeof hnswManager.setEnabled === 'function') {
       hnswManager.setEnabled(enableHnsw);
     }
