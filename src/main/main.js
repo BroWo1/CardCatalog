@@ -219,6 +219,7 @@ function createWindow() {
     height: 720,
     minWidth: 1024,
     minHeight: 720,
+    resizable: true,
     title: 'CardCatalog',
     titleBarStyle: isMac ? 'hiddenInset' : isWindows ? 'hidden' : 'default',
     // Enable transparency only where supported/reliable (macOS + Windows frameless).
@@ -244,6 +245,8 @@ function createWindow() {
   if (isWindows) {
     // Windows blur material (rough equivalent to macOS vibrancy).
     windowOptions.backgroundMaterial = 'acrylic';
+    // Ensure the resize border exists for frameless windows.
+    windowOptions.thickFrame = true;
     // Restore system window controls for frameless windows.
     windowOptions.titleBarOverlay = {
       color: '#00000000',

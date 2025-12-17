@@ -1,5 +1,5 @@
 <template>
-  <div class="album-page-root" :class="{ 'is-mac-layout': isMacLayout }">
+  <div class="album-page-root" :class="{ 'is-mac-layout': isMacLayout, 'is-windows-layout': isWindowsLayout }">
     <!-- Header -->
     <header class="app-header">
       <div class="app-header-drag-handle" aria-hidden="true"></div>
@@ -767,16 +767,18 @@ const nuxtApp = useNuxtApp();
 const router = useRouter();
 const photoAlbum = computed(() => nuxtApp.$photoAlbum || null);
 const isMacLayout = ref(false);
+const isWindowsLayout = ref(false);
 
 const VOLUME_SCOPE_ALL = 'scope:all';
 const VOLUME_SCOPE_FAVORITES = 'scope:favorites';
 const volumeScopeValueForId = (id) => (id != null ? `volume:${id}` : null);
 const isVolumeScopeValue = (value) => typeof value === 'string' && value.startsWith('volume:');
-const extractVolumeIdFromScope = (value) => (isVolumeScopeValue(value) ? value.split(':')[1] : null);
+const extractVolumeIdFromScope = (value) => (isVolumeScopeValue(value) ? value.slice('volume:'.length) : null);
 
 onMounted(() => {
   const platformLabel = navigator?.userAgent || navigator?.platform || '';
   isMacLayout.value = /mac/i.test(platformLabel);
+  isWindowsLayout.value = /win/i.test(platformLabel);
 });
 
 const hasBridge = computed(() => Boolean(photoAlbum.value));
@@ -3188,12 +3190,17 @@ onBeforeUnmount(() => {
   --sticky-columns-height: calc(100vh - var(--app-header-height) - var(--app-main-padding));
   --mac-traffic-offset: 0px;
   --header-drag-height: 18px;
+  --window-resize-border: 0px;
 }
 
 .album-page-root.is-mac-layout {
   --app-header-height: 5.5rem;
   --mac-traffic-offset: 70px;
   --header-drag-height: 26px;
+}
+
+.album-page-root.is-windows-layout {
+  --window-resize-border: 8px;
 }
 
 .album-page-root.is-mac-layout .app-header {
@@ -3222,10 +3229,10 @@ onBeforeUnmount(() => {
 .app-header::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--header-drag-height);
+  top: var(--window-resize-border);
+  left: var(--window-resize-border);
+  right: var(--window-resize-border);
+  height: calc(var(--header-drag-height) - var(--window-resize-border));
   pointer-events: none;
   -webkit-app-region: drag;
 }

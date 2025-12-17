@@ -1,5 +1,5 @@
 <template>
-  <div class="map-page-root" :class="{ 'is-mac-layout': isMacLayout }">
+  <div class="map-page-root" :class="{ 'is-mac-layout': isMacLayout, 'is-windows-layout': isWindowsLayout }">
     <header class="app-header map-page-header">
       <div class="app-header-drag-handle" aria-hidden="true"></div>
       <div class="app-header-container">
@@ -134,6 +134,7 @@ const route = useRoute();
 const photoAlbum = computed(() => nuxtApp.$photoAlbum || null);
 const hasBridge = computed(() => Boolean(photoAlbum.value));
 const isMacLayout = ref(false);
+const isWindowsLayout = ref(false);
 
 const mapContainer = ref(null);
 const mapInstance = shallowRef(null);
@@ -312,6 +313,7 @@ const handleWindowResize = () => scheduleMapResize();
 onMounted(async () => {
   const platformLabel = navigator?.userAgent || navigator?.platform || '';
   isMacLayout.value = /mac/i.test(platformLabel);
+  isWindowsLayout.value = /win/i.test(platformLabel);
 
   if (import.meta.client) {
     await initMap();
@@ -798,10 +800,15 @@ function formatClusterCount(count) {
   background: #fafafa;
   --map-header-height: 90px;
   --mac-traffic-offset: 0px;
+  --window-resize-border: 0px;
 }
 
 .map-page-root.is-mac-layout {
   --mac-traffic-offset: 70px;
+}
+
+.map-page-root.is-windows-layout {
+  --window-resize-border: 8px;
 }
 
 .app-header {
@@ -820,10 +827,10 @@ function formatClusterCount(count) {
 .app-header::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 18px;
+  top: var(--window-resize-border);
+  left: var(--window-resize-border);
+  right: var(--window-resize-border);
+  height: calc(18px - var(--window-resize-border));
   pointer-events: none;
   -webkit-app-region: drag;
 }

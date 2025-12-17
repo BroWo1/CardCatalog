@@ -112,11 +112,33 @@ export function usePhotoFormatter() {
       return absPath;
     }
     const normalized = absPath.replace(/\\/g, '/');
-    const encoded = normalized
-      .split('/')
-      .map((part) => encodeURIComponent(part))
-      .join('/');
-    return `file://${encoded}`;
+
+    // UNC paths (\\server\share\path) become //server/share/path
+    if (normalized.startsWith('//')) {
+      const encoded = normalized
+        .split('/')
+        .filter(Boolean)
+        .map((part) => encodeURIComponent(part))
+        .join('/');
+      return `file:////${encoded}`;
+    }
+
+    const parts = normalized.split('/').map((part, index) => {
+      // Preserve Windows drive letter "C:" without encoding the colon.
+      if (index === 0 && /^[a-zA-Z]:$/.test(part)) {
+        return part;
+      }
+      return encodeURIComponent(part);
+    });
+    const encodedPath = parts.join('/');
+
+    // Windows drive letter paths need an extra slash: file:///C:/...
+    if (/^[a-zA-Z]:/.test(normalized)) {
+      return `file:///${encodedPath}`;
+    }
+
+    // POSIX absolute paths will already start with '/' so file://${encodedPath} => file:///...
+    return `file://${encodedPath}`;
   }
 
   return {
