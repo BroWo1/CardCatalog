@@ -37,7 +37,7 @@
 
     <main class="map-page-main">
       <div class="map-stage">
-        <div ref="mapContainer" class="map-canvas"></div>
+        <div ref="mapContainer" class="map-canvas window-no-drag"></div>
 
         <transition name="fade">
           <div v-if="isLoading" class="map-loading window-no-drag">
@@ -894,6 +894,11 @@ function formatClusterCount(count) {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+:global(.leaflet-container),
+:global(.leaflet-container *) {
+  -webkit-app-region: no-drag;
 }
 
 .map-loading {

@@ -26,6 +26,7 @@ let hnswManager = null;
 
 const SCAN_PROGRESS_EVENT_INTERVAL_MS = 400;
 const isMac = process.platform === 'darwin';
+const isWindows = process.platform === 'win32';
 const RENDERER_DEV_URL = process.env.RENDERER_URL || null;
 const RENDERER_DIST_ENTRY = path.join(__dirname, '../renderer/.output/public/index.html');
 const CLIP_MODEL_SUBDIR = path.join('models', 'clip');
@@ -219,11 +220,13 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 720,
     title: 'CardCatalog',
-    titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-    // Enable transparency for frosted glass effect
-    transparent: true,
-    // Fully transparent background color
-    backgroundColor: '#00000000',
+    titleBarStyle: isMac ? 'hiddenInset' : isWindows ? 'hidden' : 'default',
+    // Enable transparency only where supported/reliable (macOS + Windows frameless).
+    transparent: isMac || isWindows,
+    // Fully transparent background color (needed for vibrancy/acrylic materials).
+    backgroundColor: isMac || isWindows ? '#00000000' : '#ffffff',
+    // Transparency on Windows requires a frameless window (Electron docs).
+    frame: !isWindows,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -236,6 +239,17 @@ function createWindow() {
     windowOptions.fullscreenWindowTitleVisibility = 'hidden';
     // macOS vibrancy for frosted glass effect
     windowOptions.vibrancy = 'under-window';
+  }
+
+  if (isWindows) {
+    // Windows blur material (rough equivalent to macOS vibrancy).
+    windowOptions.backgroundMaterial = 'acrylic';
+    // Restore system window controls for frameless windows.
+    windowOptions.titleBarOverlay = {
+      color: '#00000000',
+      symbolColor: '#111827',
+      height: 32,
+    };
   }
 
   mainWindow = new BrowserWindow(windowOptions);
